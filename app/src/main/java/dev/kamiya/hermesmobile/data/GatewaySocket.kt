@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -55,6 +57,8 @@ class GatewaySocket(
     private var socket: WebSocket? = null
     private var ready = CompletableDeferred<Unit>()
     private var heartbeat: Job? = null
+    private var reconnect: Job? = null
+    @Volatile private var closed = false
 
     private val _state = MutableStateFlow(SocketState.Disconnected)
     val state: StateFlow<SocketState> = _state
@@ -69,11 +73,12 @@ class GatewaySocket(
     private val _connected = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val connected: SharedFlow<Unit> = _connected
 
-    suspend fun ensureConnected() {
-        if (_state.value == SocketState.Connected) return
-        if (_state.value == SocketState.Connecting) {
-            ready.await(); return
-        }
+    // One connect at a time: the reconnect loop and a returning screen can both ask at once.
+    private val connecting = Mutex()
+
+    suspend fun ensureConnected() = connecting.withLock {
+        closed = false
+        if (_state.value == SocketState.Connected) return@withLock
         _state.value = SocketState.Connecting
         ready = CompletableDeferred()
         val ticket = try {
@@ -83,8 +88,19 @@ class GatewaySocket(
             ready.completeExceptionally(e)
             throw e
         }
-        socket = client.newWebSocket(Request.Builder().url(api.webSocketUrl(ticket)).build(), Listener())
-        withTimeout(20_000) { ready.await() }
+        val ws = client.newWebSocket(Request.Builder().url(api.webSocketUrl(ticket)).build(), Listener())
+        socket = ws
+        try {
+            withTimeout(20_000) { ready.await() }
+        } catch (e: Exception) {
+            // Never left "connecting": the next attempt must start over rather than wait on this one.
+            if (socket === ws) {
+                socket = null
+                _state.value = SocketState.Disconnected
+            }
+            ws.cancel()
+            throw e
+        }
     }
 
     suspend fun request(method: String, params: JsonObject = JsonObject(emptyMap())): JsonElement {
@@ -107,10 +123,23 @@ class GatewaySocket(
     }
 
     fun close() {
+        closed = true
+        reconnect?.cancel()
         socket?.close(1000, null)
         socket = null
         heartbeat?.cancel()
         _state.value = SocketState.Disconnected
+    }
+
+    /**
+     * Whether the connection still answers. A socket can look open after the phone slept or changed networks while
+     * nothing reaches it; one that does not answer within a few seconds is torn down, which starts a reconnect.
+     */
+    suspend fun ping(): Boolean {
+        if (_state.value != SocketState.Connected) return false
+        val ok = runCatching { withTimeout(5_000) { request("gateway.ping") } }.isSuccess
+        if (!ok) socket?.cancel()
+        return ok
     }
 
     private fun startHeartbeat() {
@@ -118,7 +147,24 @@ class GatewaySocket(
         heartbeat = scope.launch {
             while (isActive) {
                 delay(15_000)
-                runCatching { request("gateway.ping") }.onFailure { socket?.cancel() }
+                ping()
+            }
+        }
+    }
+
+    /**
+     * Comes back on its own after a drop (Wi-Fi switch, the gateway restarting, the phone waking up): events that
+     * happen while nothing is connected are never replayed, so waiting for the next request would leave open
+     * sessions stale. Backs off to a minute; [connected] then tells sessions to resync.
+     */
+    private fun scheduleReconnect() {
+        if (closed || reconnect?.isActive == true) return
+        reconnect = scope.launch {
+            var wait = 1_000L
+            while (isActive && !closed && _state.value != SocketState.Connected) {
+                delay(wait)
+                runCatching { ensureConnected() }
+                wait = (wait * 2).coerceAtMost(60_000)
             }
         }
     }
@@ -171,16 +217,18 @@ class GatewaySocket(
             text.lineSequence().filter { it.isNotBlank() }.forEach(::handleLine)
         }
 
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = drop(IOException("closed $code"))
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = drop(webSocket, IOException("closed $code"))
 
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = drop(t)
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = drop(webSocket, t)
 
-        private fun drop(cause: Throwable) {
+        private fun drop(webSocket: WebSocket, cause: Throwable) {
+            if (webSocket !== socket) return // a connection already replaced
             heartbeat?.cancel()
             _state.value = SocketState.Disconnected
             if (!ready.isCompleted) ready.completeExceptionally(cause)
             pending.values.forEach { it.completeExceptionally(IOException("connection lost", cause)) }
             pending.clear()
+            scheduleReconnect()
         }
     }
 }

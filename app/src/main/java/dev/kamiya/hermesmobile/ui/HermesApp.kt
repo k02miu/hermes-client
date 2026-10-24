@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.kamiya.hermesmobile.HermesApplication
@@ -54,6 +55,11 @@ private fun MainScreen(vm: AppViewModel, auth: AuthState.Ready) {
     val list by vm.list.collectAsStateWithLifecycle()
     val avatars by vm.avatars.collectAsStateWithLifecycle()
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
+    // Back from the background: running badges and last-active times may have moved on meanwhile.
+    LifecycleResumeEffect(vm) {
+        vm.refresh()
+        onPauseOrDispose {}
+    }
     // A Fold's inner screen is ~750dp wide ("medium"); the default directive only splits from 840dp.
     val navigator = rememberListDetailPaneScaffoldNavigator<PaneKey>(
         scaffoldDirective = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(currentWindowAdaptiveInfo()),

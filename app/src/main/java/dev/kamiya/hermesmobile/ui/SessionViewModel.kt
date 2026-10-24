@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -97,6 +99,9 @@ class SessionViewModel(
     private var storedId: String? = target.sessionId
     private var subscriptionId: String? = null
 
+    // Declared before init: its launches run immediately on the main dispatcher and reach open() at once.
+    private val opening = Mutex()
+
     init {
         viewModelScope.launch { conn.socket.events.collect(::onEvent) }
         viewModelScope.launch { conn.socket.requests.collect(::onServerRequest) }
@@ -104,7 +109,8 @@ class SessionViewModel(
         viewModelScope.launch { open() }
     }
 
-    private suspend fun open() {
+    /** Resumes (again, after a reconnect or a refresh: the gateway does not double the events) and reloads history. */
+    private suspend fun open() = opening.withLock {
         try {
             val known = storedId
             val creating = known == null && target.newId != null
@@ -137,14 +143,28 @@ class SessionViewModel(
         }
     }
 
+    /**
+     * Re-reads the stored history when the pane comes back (reopened, or the app returns to the foreground):
+     * this view model outlives the pane, and a socket that quietly died while the phone slept misses events.
+     */
+    fun refresh() {
+        if (liveId == null) return // still opening; open() loads the history itself
+        viewModelScope.launch {
+            // A live socket is resumed directly so the running flag and pending prompts are current too; a dead one
+            // reconnects, and its `connected` signal reopens every session.
+            if (conn.socket.ping()) open() else runCatching { conn.socket.ensureConnected() }
+        }
+    }
+
     private suspend fun loadHistory() {
         val id = storedId ?: return
         runCatching { conn.api.messages(id, target.profile, limit = 60) }
             .onSuccess { resp ->
                 val history = resp.messages.flatMap(::toItems)
                 _state.update { s ->
-                    // Keep live rows that history has not caught up with yet (an answer still streaming).
-                    val live = s.items.filter { it is ChatItem.Assistant && it.streaming || it is ChatItem.User && it.pending }
+                    // Keep live rows that history has not caught up with yet (an answer still streaming), unless the
+                    // turn is over: then a streaming row is one whose completion was missed while disconnected.
+                    val live = s.items.filter { it is ChatItem.Assistant && it.streaming && s.running || it is ChatItem.User && it.pending }
                     s.copy(items = history + live, loading = false)
                 }
             }

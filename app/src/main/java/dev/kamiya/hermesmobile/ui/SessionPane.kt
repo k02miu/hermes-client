@@ -51,6 +51,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +85,10 @@ fun SessionPane(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var preview by rememberSaveable { mutableStateOf<String?>(null) }
+    LifecycleResumeEffect(vm) {
+        vm.refresh()
+        onPauseOrDispose {}
+    }
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
         Header(state, profileLabel, avatar, onBack)
@@ -130,8 +136,15 @@ private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, St
     val list = rememberLazyListState()
     val clarifies = state.prompts.filterNot { it is PendingPrompt.Approval }
     val newestKey = clarifies.lastOrNull()?.promptId ?: state.items.lastOrNull()?.key
+    // Whether the reader is at the bottom, judged only while they scroll: the list keeps its place by item key,
+    // so rows arriving below shift firstVisibleItemIndex up and would otherwise read as "scrolled away".
+    var atBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress to list.firstVisibleItemIndex }
+            .collect { (scrolling, index) -> if (scrolling) atBottom = index <= 1 }
+    }
     LaunchedEffect(newestKey) {
-        if (list.firstVisibleItemIndex <= 1) list.scrollToItem(0)
+        if (atBottom) list.scrollToItem(0)
     }
     LazyColumn(
         state = list, modifier = Modifier.fillMaxSize(), reverseLayout = true,
