@@ -1,0 +1,78 @@
+"""Tailscale identity endpoint for the Hermes `tailscale` dashboard auth provider.
+
+Listens on loopback and is published at <public_url>/ts-auth by `tailscale serve`, which
+overwrites the Tailscale-User-Login header on every request. For an allowed login it signs a
+60-second code (bound to the redirect URI and PKCE challenge) and redirects back to Hermes.
+Shares its secret and allowlist with the plugin via ~/.hermes/tailscale-auth.json.
+
+Run with Hermes's own interpreter (the LaunchAgent does): ~/.hermes/hermes-agent/venv/bin/python -I.
+"""
+import base64
+import email.header
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+CONFIG = json.loads((Path.home() / ".hermes" / "tailscale-auth.json").read_text())
+SECRET = CONFIG["secret"].encode()
+ALLOWED = frozenset(CONFIG["allowed_logins"])
+CALLBACK_PREFIX = CONFIG["public_url"].rstrip("/") + "/"
+PORT = int(os.environ.get("HERMES_TS_AUTH_PORT", "18766"))
+CODE_TTL_SECONDS = 60
+
+
+def sign(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw + hmac.new(SECRET, raw, hashlib.sha256).digest()).decode()
+
+
+def display_name(raw: str) -> str:
+    try:
+        return str(email.header.make_header(email.header.decode_header(raw)))
+    except Exception:
+        return ""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.rstrip("/") not in ("/authorize", "/ts-auth/authorize"):
+            return self.fail(404, "not found")
+        q = dict(urllib.parse.parse_qsl(url.query))
+        redirect_uri, state, challenge = q.get("redirect_uri", ""), q.get("state", ""), q.get("code_challenge", "")
+        if not redirect_uri.startswith(CALLBACK_PREFIX) or not state or not challenge \
+                or q.get("code_challenge_method") != "S256":
+            return self.fail(400, "invalid request")
+        login = self.headers.get("Tailscale-User-Login", "")
+        if login not in ALLOWED:
+            return self.fail(403, "this Tailscale account is not allowed")
+        code = sign({"kind": "code", "login": login, "name": display_name(self.headers.get("Tailscale-User-Name", "")),
+                     "challenge": challenge, "redirect_uri": redirect_uri,
+                     "exp": int(time.time()) + CODE_TTL_SECONDS, "nonce": secrets.token_urlsafe(8)})
+        sep = "&" if "?" in redirect_uri else "?"
+        self.send_response(302)
+        self.send_header("Location", redirect_uri + sep + urllib.parse.urlencode({"code": code, "state": state}))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.log_message("issued code for %s", login)
+
+    def fail(self, status: int, message: str):
+        body = message.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        self.log_message("refused (%d): %s", status, message)
+
+    def log_message(self, fmt, *args):
+        print(time.strftime("%Y-%m-%d %H:%M:%S"), fmt % args, flush=True)
+
+
+ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

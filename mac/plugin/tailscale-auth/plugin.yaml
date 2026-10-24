@@ -1,0 +1,5 @@
+name: tailscale-auth
+version: 0.1.0
+description: "Dashboard auth provider — sign in with your Tailscale identity. Codes are issued by the local /ts-auth endpoint behind `tailscale serve`, which reads the Tailscale-User-Login header; this provider verifies them and mints stateless HMAC sessions. Config: ~/.hermes/tailscale-auth.json."
+author: hermes-mobile
+kind: backend

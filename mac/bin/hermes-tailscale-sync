@@ -1,0 +1,37 @@
+#!/bin/zsh
+# Keep `tailscale serve` pointed at the Hermes gateway's local listener.
+# The gateway binds 127.0.0.1 on a random port that changes on every restart,
+# so poll its pid/port and re-point the HTTPS proxy whenever it moves.
+
+LIFECYCLE="$HOME/.hermes/state/gateway.lifecycle.json"
+TAILSCALE="${TAILSCALE:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
+INTERVAL=10
+applied=""
+
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+gateway_port() {
+  [[ -r "$LIFECYCLE" ]] || return 1
+  [[ "$(/usr/bin/plutil -extract phase raw -o - "$LIFECYCLE" 2>/dev/null)" == running ]] || return 1
+  local pid
+  pid=$(/usr/bin/plutil -extract pid raw -o - "$LIFECYCLE" 2>/dev/null) || return 1
+  /bin/kill -0 "$pid" 2>/dev/null || return 1
+  /usr/sbin/lsof -nP -a -p "$pid" -iTCP@127.0.0.1 -sTCP:LISTEN -Fn 2>/dev/null \
+    | /usr/bin/sed -n 's/^n127\.0\.0\.1:\([0-9]*\)$/\1/p' | /usr/bin/head -1
+}
+
+log "start"
+while true; do
+  port=$(gateway_port)
+  if [[ -n "$port" && "$port" != "$applied" ]]; then
+    if /usr/bin/curl -fsS -m 5 -o /dev/null "http://127.0.0.1:$port/api/status"; then
+      if "$TAILSCALE" serve --bg --https=443 "http://127.0.0.1:$port" >/dev/null 2>&1; then
+        log "serve -> 127.0.0.1:$port"
+        applied="$port"
+      else
+        log "tailscale serve failed for port $port"
+      fi
+    fi
+  fi
+  sleep "$INTERVAL"
+done

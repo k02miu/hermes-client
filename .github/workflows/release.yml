@@ -46,14 +46,22 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks"
 
+      - name: Package the Mac side
+        run: |
+          mkdir -p dist/hermes-mobile-mac
+          cp -R mac/. dist/hermes-mobile-mac/
+          tar -czf hermes-mobile-mac.tar.gz -C dist hermes-mobile-mac
+
       - uses: actions/upload-artifact@v6
         with:
           name: hermes-mobile-release
-          path: ${{ env.APK }}
+          path: |
+            ${{ env.APK }}
+            hermes-mobile-mac.tar.gz
           retention-days: 30
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$APK" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "$APK" hermes-mobile-mac.tar.gz --title "$GITHUB_REF_NAME" --generate-notes
