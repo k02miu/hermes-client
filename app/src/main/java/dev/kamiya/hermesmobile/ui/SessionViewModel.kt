@@ -166,6 +166,8 @@ class SessionViewModel(
         }
     }
 
+    suspend fun readFile(path: String) = conn.api.readFile(path, target.profile)
+
     fun interrupt() {
         val id = liveId ?: return
         viewModelScope.launch {

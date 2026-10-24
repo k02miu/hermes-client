@@ -1,5 +1,6 @@
 package dev.kamiya.hermesmobile.data
 
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -9,6 +10,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+
+class GatewayFile(val name: String, val mimeType: String, val bytes: ByteArray)
 
 class HermesHttpException(val code: Int, message: String) : IOException(message)
 
@@ -46,6 +49,16 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
             addQueryParameter("order", "latest")
             addQueryParameter("inline_images", "false")
         }
+
+    /** A file on the gateway's disk (a `MEDIA:` delivery), with the same guards Desktop's file browser gets. */
+    suspend fun readFile(path: String, profile: String): GatewayFile {
+        val r = get<FileReadResponse>("api/files/read") {
+            addQueryParameter("path", path)
+            addQueryParameter("profile", profile)
+        }
+        val bytes = Base64.decode(r.dataUrl.substringAfter("base64,", ""), Base64.DEFAULT)
+        return GatewayFile(r.name, r.mimeType, bytes)
+    }
 
     suspend fun wsTicket(): WsTicket {
         val req = Request.Builder().url(base.resolve("api/auth/ws-ticket")!!).post(ByteArray(0).toRequestBody()).build()

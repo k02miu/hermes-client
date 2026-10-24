@@ -68,3 +68,11 @@ data class SidebarResponse(val recents: SessionSlice = SessionSlice())
 
 @Serializable
 data class WsTicket(val ticket: String, @SerialName("ttl_seconds") val ttlSeconds: Int = 30)
+
+/** `GET /api/files/read`: a gateway-local file as a base64 data URL. */
+@Serializable
+data class FileReadResponse(
+    val name: String = "",
+    @SerialName("mime_type") val mimeType: String = "",
+    @SerialName("data_url") val dataUrl: String = "",
+)

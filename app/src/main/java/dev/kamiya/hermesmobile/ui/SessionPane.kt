@@ -82,10 +82,12 @@ fun SessionPane(
     vm: SessionViewModel, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?, modifier: Modifier = Modifier,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    Column(modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
+    var preview by rememberSaveable { mutableStateOf<String?>(null) }
+    Box(modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
         Header(state, profileLabel, avatar, onBack)
         Box(Modifier.weight(1f)) {
-            Transcript(state, onAnswer = vm::answer)
+            Transcript(state, onAnswer = vm::answer, onOpenMedia = { preview = it })
             if (state.loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = HermesColors.Working)
             else if (state.items.isEmpty() && state.prompts.isEmpty()) {
                 Text("$profileLabel に話しかけて始めましょう", color = HermesColors.Muted, fontSize = 14.sp,
@@ -97,6 +99,9 @@ fun SessionPane(
     }
     state.prompts.filterIsInstance<PendingPrompt.Approval>().firstOrNull()?.let { approval ->
         ApprovalSheet(approval, state.title, onChoose = { vm.answer(approval, it) })
+    }
+    // Over the chat rather than in a dialog: a WebView in a dialog window draws over the dialog's own top bar.
+    preview?.let { MediaPreview(it, load = vm::readFile, onClose = { preview = null }) }
     }
 }
 
@@ -119,7 +124,7 @@ private fun Header(state: SessionState, profileLabel: String, avatar: ImageBitma
 }
 
 @Composable
-private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, String) -> Unit) {
+private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, String) -> Unit, onOpenMedia: (String) -> Unit) {
     // Laid out bottom-up (newest first, reversed) so a session always opens on its latest message,
     // however late the history arrives. New rows follow along only while the reader is at the bottom.
     val list = rememberLazyListState()
@@ -137,7 +142,7 @@ private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, St
         items(state.items.asReversed(), key = { it.key }) { item ->
             when (item) {
                 is ChatItem.User -> UserBubble(item)
-                is ChatItem.Assistant -> AssistantText(item)
+                is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
                 is ChatItem.Tool -> ToolRow(item)
                 is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
             }
@@ -161,14 +166,27 @@ private fun UserBubble(item: ChatItem.User) {
 }
 
 @Composable
-private fun AssistantText(item: ChatItem.Assistant) {
+private fun AssistantText(item: ChatItem.Assistant, onOpenMedia: (String) -> Unit) {
     if (item.text.isBlank() && item.streaming) {
         Text("…", color = HermesColors.Muted)
         return
     }
+    val parts = remember(item.text) { splitMedia(item.text) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        parts.forEach { part ->
+            when (part) {
+                is TextPart.Prose -> MarkdownText(part.text)
+                is TextPart.Media -> MediaChip(part.path, onOpen = { onOpenMedia(part.path) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownText(text: String) {
     SelectionContainer {
         Markdown(
-            content = item.text,
+            content = text,
             colors = markdownColor(text = HermesColors.Text, codeBackground = HermesColors.Terminal),
             typography = markdownTypography(
                 text = TextStyle(fontSize = 14.sp, lineHeight = 24.sp),
