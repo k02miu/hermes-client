@@ -1,12 +1,12 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.kamiya.hermesmobile.HermesApplication
-import dev.kamiya.hermesmobile.data.GatewayEvent
-import dev.kamiya.hermesmobile.data.RpcException
-import dev.kamiya.hermesmobile.data.ServerRequest
-import dev.kamiya.hermesmobile.data.StoredMessage
+import io.github.k02miu.hermesmobile.HermesApplication
+import io.github.k02miu.hermesmobile.data.GatewayEvent
+import io.github.k02miu.hermesmobile.data.RpcException
+import io.github.k02miu.hermesmobile.data.ServerRequest
+import io.github.k02miu.hermesmobile.data.StoredMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update

@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.kamiya.hermesmobile"
+    namespace = "io.github.k02miu.hermesmobile"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.kamiya.hermesmobile"
+        applicationId = "io.github.k02miu.hermesmobile"
         minSdk = 31
         targetSdk = 36
         // CI passes the tag and run number; local builds keep the defaults.

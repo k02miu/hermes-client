@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
@@ -53,10 +53,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.kamiya.hermesmobile.data.SessionSummary
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
-import dev.kamiya.hermesmobile.ui.theme.MonoFamily
-import dev.kamiya.hermesmobile.ui.theme.ThemeMode
+import io.github.k02miu.hermesmobile.data.SessionSummary
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.MonoFamily
+import io.github.k02miu.hermesmobile.ui.theme.ThemeMode
 
 @Composable
 fun SessionListPane(

@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -36,7 +36,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
 
 @Composable
 fun ConnectScreen(state: AuthState.NeedsLogin, onLogin: (String) -> Unit) {

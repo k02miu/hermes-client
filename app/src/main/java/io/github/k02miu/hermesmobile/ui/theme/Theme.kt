@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui.theme
+package io.github.k02miu.hermesmobile.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme

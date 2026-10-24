@@ -10,7 +10,7 @@ HERMES="$HERMES_HOME/hermes-agent/venv/bin/hermes"
 TAILSCALE="${TAILSCALE:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
 APP_DIR="$HOME/Library/Application Support/HermesMobile"
 AGENTS="$HOME/Library/LaunchAgents"
-LABEL_PREFIX="dev.kamiya.hermesmobile"
+LABEL_PREFIX="io.github.k02miu.hermesmobile"
 
 PURGE=0
 [ "${1:-}" = --purge ] && PURGE=1

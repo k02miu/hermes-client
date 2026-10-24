@@ -23,11 +23,9 @@ TAILSCALE="${TAILSCALE:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
 APP_DIR="$HOME/Library/Application Support/HermesMobile"
 LOG_DIR="$HOME/Library/Logs/HermesMobile"
 AGENTS="$HOME/Library/LaunchAgents"
-LABEL_PREFIX="dev.kamiya.hermesmobile"
+LABEL_PREFIX="io.github.k02miu.hermesmobile"
 AUTH_PORT=18766
 AUTH_CONFIG="$HERMES_HOME/tailscale-auth.json"
-# Labels this setup used before it was packaged; replaced on install.
-LEGACY_LABELS="com.kamiya.hermes-tailscale-sync com.kamiya.hermes-ts-auth"
 APK_URL="https://github.com/k02miu/hermes-client/releases/latest"
 
 DRY_RUN=0
@@ -164,14 +162,6 @@ reload_agent() { # label
   run launchctl bootout "$domain/$1" 2>/dev/null || true
   run launchctl bootstrap "$domain" "$AGENTS/$1.plist"
 }
-
-for legacy in $LEGACY_LABELS; do
-  if [ -f "$AGENTS/$legacy.plist" ]; then
-    say "Retiring the earlier agent $legacy"
-    run launchctl bootout "gui/$(id -u)/$legacy" 2>/dev/null || true
-    run rm -f "$AGENTS/$legacy.plist"
-  fi
-done
 
 write_agent "$LABEL_PREFIX.ts-auth" "$PYTHON" -I "$APP_DIR/bin/hermes-ts-auth"
 write_agent "$LABEL_PREFIX.serve-sync" /bin/zsh "$APP_DIR/bin/hermes-tailscale-sync"

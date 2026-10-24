@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import android.os.Parcelable
 import androidx.compose.foundation.background
@@ -26,8 +26,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import dev.kamiya.hermesmobile.HermesApplication
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.HermesApplication
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
 import kotlinx.coroutines.launch
 import kotlinx.parcelize.Parcelize
 

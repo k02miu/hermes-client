@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -71,8 +71,8 @@ import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
-import dev.kamiya.hermesmobile.ui.theme.MonoFamily
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.MonoFamily
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive

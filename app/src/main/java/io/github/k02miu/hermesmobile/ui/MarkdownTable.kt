@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes

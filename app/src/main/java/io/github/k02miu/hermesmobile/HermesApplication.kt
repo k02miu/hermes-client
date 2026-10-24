@@ -1,10 +1,10 @@
-package dev.kamiya.hermesmobile
+package io.github.k02miu.hermesmobile
 
 import android.app.Application
-import dev.kamiya.hermesmobile.data.GatewaySocket
-import dev.kamiya.hermesmobile.data.HermesApi
-import dev.kamiya.hermesmobile.data.PersistentCookieJar
-import dev.kamiya.hermesmobile.data.Settings
+import io.github.k02miu.hermesmobile.data.GatewaySocket
+import io.github.k02miu.hermesmobile.data.HermesApi
+import io.github.k02miu.hermesmobile.data.PersistentCookieJar
+import io.github.k02miu.hermesmobile.data.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

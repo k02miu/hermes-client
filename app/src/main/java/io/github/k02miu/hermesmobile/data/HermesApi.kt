@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.data
+package io.github.k02miu.hermesmobile.data
 
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers

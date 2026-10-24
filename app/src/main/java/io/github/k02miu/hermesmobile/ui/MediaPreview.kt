@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import android.content.Intent
 import android.net.Uri
@@ -43,9 +43,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.draw.clipToBounds
 import androidx.activity.compose.BackHandler
-import dev.kamiya.hermesmobile.data.GatewayFile
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
-import dev.kamiya.hermesmobile.ui.theme.MonoFamily
+import io.github.k02miu.hermesmobile.data.GatewayFile
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.MonoFamily
 
 /** A run of assistant text: Markdown, or a file the agent delivered with a `MEDIA:<path>` line. */
 sealed interface TextPart {

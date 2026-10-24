@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.ui
+package io.github.k02miu.hermesmobile.ui
 
 import android.app.Application
 import android.graphics.BitmapFactory
@@ -7,11 +7,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.kamiya.hermesmobile.HermesApplication
-import dev.kamiya.hermesmobile.data.HermesHttpException
-import dev.kamiya.hermesmobile.data.Profile
-import dev.kamiya.hermesmobile.data.SessionSummary
-import dev.kamiya.hermesmobile.ui.theme.ThemeMode
+import io.github.k02miu.hermesmobile.HermesApplication
+import io.github.k02miu.hermesmobile.data.HermesHttpException
+import io.github.k02miu.hermesmobile.data.Profile
+import io.github.k02miu.hermesmobile.data.SessionSummary
+import io.github.k02miu.hermesmobile.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow

@@ -33,7 +33,7 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 | 設定と秘密鍵 | `~/.hermes/tailscale-auth.json`（本人のみ読み書き可） | 許可するアカウント、公開 URL、署名用の秘密鍵 |
 | `hermes-ts-auth` | `~/Library/Application Support/HermesMobile/bin` | `/ts-auth` で Tailscale の本人情報を受け取り、60 秒だけ有効なサインイン用コードを発行する |
 | `hermes-tailscale-sync` | 同上 | Hermes の待ち受けポートは起動のたびに変わるので、`tailscale serve` の転送先を追従させる |
-| LaunchAgent 2 つ | `~/Library/LaunchAgents/dev.kamiya.hermesmobile.*.plist` | ログイン時に上の 2 つを起動し、止まったら 30 秒後に起動し直す |
+| LaunchAgent 2 つ | `~/Library/LaunchAgents/io.github.k02miu.hermesmobile.*.plist` | ログイン時に上の 2 つを起動し、止まったら 30 秒後に起動し直す |
 
 Hermes の設定は `plugins.enabled` に `tailscale-auth` を足し、`dashboard.public_url` を設定するだけです。
 公開は `tailscale serve`（tailnet 内のみ）で、インターネットには出しません。

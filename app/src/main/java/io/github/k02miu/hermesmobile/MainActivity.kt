@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile
+package io.github.k02miu.hermesmobile
 
 import android.content.Intent
 import android.os.Bundle
@@ -11,11 +11,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.kamiya.hermesmobile.ui.AppViewModel
-import dev.kamiya.hermesmobile.ui.HermesApp
-import dev.kamiya.hermesmobile.ui.theme.HermesColors
-import dev.kamiya.hermesmobile.ui.theme.HermesTheme
-import dev.kamiya.hermesmobile.ui.theme.isHermesDark
+import io.github.k02miu.hermesmobile.ui.AppViewModel
+import io.github.k02miu.hermesmobile.ui.HermesApp
+import io.github.k02miu.hermesmobile.ui.theme.HermesColors
+import io.github.k02miu.hermesmobile.ui.theme.HermesTheme
+import io.github.k02miu.hermesmobile.ui.theme.isHermesDark
 
 class MainActivity : ComponentActivity() {
     private val appViewModel: AppViewModel by viewModels()

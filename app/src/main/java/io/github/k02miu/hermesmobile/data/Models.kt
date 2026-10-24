@@ -1,4 +1,4 @@
-package dev.kamiya.hermesmobile.data
+package io.github.k02miu.hermesmobile.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
