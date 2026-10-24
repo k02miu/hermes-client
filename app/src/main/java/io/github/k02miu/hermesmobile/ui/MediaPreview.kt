@@ -82,7 +82,7 @@ fun MediaChip(path: String, onOpen: () -> Unit) {
     val ext = extOf(path)
     val previewable = canPreview(path)
     Row(
-        Modifier.widthIn(max = 640.dp).fillMaxWidth()
+        Modifier.fillMaxWidth()
             .background(HermesColors.Surface, RoundedCornerShape(12.dp))
             .border(1.dp, HermesColors.Line, RoundedCornerShape(12.dp))
             .clickable(enabled = previewable, onClick = onOpen)

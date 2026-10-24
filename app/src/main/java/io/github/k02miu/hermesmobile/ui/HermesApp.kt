@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -75,7 +76,8 @@ private fun MainScreen(vm: AppViewModel, auth: AuthState.Ready) {
         navigator = navigator,
         modifier = Modifier.background(HermesColors.Ground).safeDrawingPadding(),
         listPane = {
-            AnimatedPane(Modifier.preferredWidth(280.dp)) {
+            // A Fold's inner screen keeps the list narrow; a tablet has room for longer titles.
+            AnimatedPane(Modifier.preferredWidth(if (LocalConfiguration.current.screenWidthDp >= 1000) 340.dp else 280.dp)) {
                 SessionListPane(
                     host = host, state = list, avatars = avatars, selectedKey = current?.target()?.key,
                     onSelectProfile = vm::selectProfile,

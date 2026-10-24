@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -146,22 +147,30 @@ private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, St
     LaunchedEffect(newestKey) {
         if (atBottom) list.scrollToItem(0)
     }
-    LazyColumn(
-        state = list, modifier = Modifier.fillMaxSize(), reverseLayout = true,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
-    ) {
-        items(clarifies.asReversed(), key = { "clarify-" + it.promptId }) { ClarifyCard(it, onAnswer) }
-        items(state.items.asReversed(), key = { it.key }) { item ->
-            when (item) {
-                is ChatItem.User -> UserBubble(item)
-                is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
-                is ChatItem.Tool -> ToolRow(item)
-                is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
+    // On a tablet the pane is far wider than a comfortable line: keep the conversation in a centred column,
+    // padded rather than narrowed so the whole pane still scrolls.
+    BoxWithConstraints {
+        val side = maxOf(16.dp, (maxWidth - READING_WIDTH) / 2)
+        LazyColumn(
+            state = list, modifier = Modifier.fillMaxSize(), reverseLayout = true,
+            contentPadding = PaddingValues(horizontal = side, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
+        ) {
+            items(clarifies.asReversed(), key = { "clarify-" + it.promptId }) { ClarifyCard(it, onAnswer) }
+            items(state.items.asReversed(), key = { it.key }) { item ->
+                when (item) {
+                    is ChatItem.User -> UserBubble(item)
+                    is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
+                    is ChatItem.Tool -> ToolRow(item)
+                    is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
+                }
             }
         }
     }
 }
+
+/** The widest the conversation column gets on a tablet, so lines stay short enough to read. */
+private val READING_WIDTH = 860.dp
 
 @Composable
 private fun UserBubble(item: ChatItem.User) {
@@ -214,7 +223,7 @@ private fun MarkdownText(text: String) {
                 ordered = TextStyle(fontSize = 14.sp, lineHeight = 24.sp),
             ),
             components = autoWidthTables,
-            modifier = Modifier.widthIn(max = 640.dp),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -346,12 +355,15 @@ private fun Composer(running: Boolean, onSend: (String) -> Unit, onStop: () -> U
     // The pane transition hands focus to the first focusable it finds, which would raise the
     // keyboard on every open. The field only accepts focus once the user has touched it.
     var touched by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().background(HermesColors.Rail).navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp)) {
+    Column(
+        Modifier.fillMaxWidth().background(HermesColors.Rail).navigationBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         if (running) {
             Text("Hermes が作業中です。送った指示は順番に処理されます", fontSize = 12.sp, color = HermesColors.Muted,
-                modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
+                modifier = Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 4.dp, bottom = 8.dp))
         }
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.widthIn(max = READING_WIDTH), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = text, onValueChange = { text = it }, placeholder = { Text("指示を入力…") },
                 modifier = Modifier.weight(1f)
