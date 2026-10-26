@@ -55,6 +55,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +92,10 @@ fun SessionPane(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var preview by rememberSaveable { mutableStateOf<String?>(null) }
+    var toolKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var showProcesses by rememberSaveable { mutableStateOf(false) }
+    val lifecycle = LocalLifecycleOwner.current
+    LaunchedEffect(vm) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { vm.watchProcesses() } }
     LifecycleResumeEffect(vm) {
         vm.refresh()
         onPauseOrDispose {}
@@ -97,7 +104,7 @@ fun SessionPane(
     Column(Modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
         Header(state, profileLabel, avatar, onBack, leading, actions)
         Box(Modifier.weight(1f)) {
-            Transcript(state, onAnswer = vm::answer, onOpenMedia = { preview = it })
+            Transcript(state, onAnswer = vm::answer, onOpenMedia = { preview = it }, onOpenTool = { toolKey = it.key })
             if (state.loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = HermesColors.Working)
             else if (state.items.isEmpty() && state.prompts.isEmpty()) {
                 Text("$profileLabel に話しかけて始めましょう", color = HermesColors.Muted, fontSize = 14.sp,
@@ -105,8 +112,15 @@ fun SessionPane(
             }
         }
         state.error?.let { Text(it, color = HermesColors.Danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
+        ProcessStrip(state.processes, onOpen = { showProcesses = true })
         Composer(running = state.running, onSend = vm::send, onStop = vm::interrupt)
     }
+    // Looked up by key so a call still running fills in as its result arrives.
+    toolKey?.let { key ->
+        val tool = state.items.firstOrNull { it.key == key } as? ChatItem.Tool
+        if (tool == null) toolKey = null else ToolSheet(tool, onDismiss = { toolKey = null })
+    }
+    if (showProcesses) ProcessSheet(state.processes, onKill = { vm.killProcess(it.id) }, onDismiss = { showProcesses = false })
     state.prompts.filterIsInstance<PendingPrompt.Approval>().firstOrNull()?.let { approval ->
         ApprovalSheet(approval, state.title, onChoose = { vm.answer(approval, it) })
     }
@@ -133,6 +147,7 @@ private fun Header(
             Text(profileLabel, fontSize = 11.sp, color = HermesColors.Muted, fontFamily = MonoFamily)
         }
         if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
+        else if (state.waiting) Badge("待機中", HermesColors.AccentSurface, HermesColors.Accent)
         Spacer(Modifier.size(8.dp))
         actions()
     }
@@ -140,11 +155,14 @@ private fun Header(
 }
 
 @Composable
-private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, String) -> Unit, onOpenMedia: (String) -> Unit) {
+private fun Transcript(
+    state: SessionState, onAnswer: (PendingPrompt, String, String) -> Unit, onOpenMedia: (String) -> Unit, onOpenTool: (ChatItem.Tool) -> Unit,
+) {
     // Laid out bottom-up (newest first, reversed) so a session always opens on its latest message,
     // however late the history arrives. New rows follow along only while the reader is at the bottom.
     val list = rememberLazyListState()
     val clarifies = state.prompts.filterNot { it is PendingPrompt.Approval }
+    val rows = remember(state.items) { groupTools(state.items) }
     val newestKey = clarifies.lastOrNull()?.promptId ?: state.items.lastOrNull()?.key
     // Whether the reader is at the bottom, judged only while they scroll: the list keeps its place by item key,
     // so rows arriving below shift firstVisibleItemIndex up and would otherwise read as "scrolled away".
@@ -166,12 +184,15 @@ private fun Transcript(state: SessionState, onAnswer: (PendingPrompt, String, St
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
         ) {
             items(clarifies.asReversed(), key = { "clarify-" + it.promptId }) { ClarifyCard(it, onAnswer) }
-            items(state.items.asReversed(), key = { it.key }) { item ->
-                when (item) {
-                    is ChatItem.User -> UserBubble(item)
-                    is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
-                    is ChatItem.Tool -> ToolRow(item)
-                    is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
+            items(rows.asReversed(), key = { it.key }) { row ->
+                when (row) {
+                    is TranscriptRow.Tools -> ToolGroup(row, onOpenTool)
+                    is TranscriptRow.Single -> when (val item = row.item) {
+                        is ChatItem.User -> UserBubble(item)
+                        is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
+                        is ChatItem.Tool -> ToolRow(item, onOpenTool)
+                        is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
+                    }
                 }
             }
         }
@@ -241,26 +262,6 @@ private fun MarkdownText(text: String) {
 private val autoWidthTables = markdownComponents(table = { model ->
     AutoWidthTable(model.content, model.node, model.typography.table)
 })
-
-@Composable
-private fun ToolRow(item: ChatItem.Tool) {
-    Row(
-        Modifier.fillMaxWidth().background(HermesColors.Surface, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        when (item.state) {
-            ToolState.Running -> CircularProgressIndicator(Modifier.size(14.dp), color = HermesColors.Working, strokeWidth = 2.dp)
-            ToolState.Done -> Icon(Icons.Default.Check, null, tint = HermesColors.Done, modifier = Modifier.size(16.dp))
-            ToolState.Failed -> Icon(Icons.Default.Close, null, tint = HermesColors.Danger, modifier = Modifier.size(16.dp))
-        }
-        Spacer(Modifier.size(10.dp))
-        Text(item.name, fontFamily = MonoFamily, fontSize = 12.sp, color = HermesColors.TextSoft)
-        if (item.detail.isNotBlank()) {
-            Spacer(Modifier.size(8.dp))
-            Text(item.detail, fontFamily = MonoFamily, fontSize = 11.sp, color = HermesColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
 
 @Composable
 private fun ClarifyCard(prompt: PendingPrompt, onAnswer: (PendingPrompt, String, String) -> Unit) {

@@ -4,12 +4,16 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.UUID
 
 class GatewayFile(val name: String, val mimeType: String, val bytes: ByteArray)
 
@@ -49,6 +53,28 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
             addQueryParameter("order", "latest")
             addQueryParameter("inline_images", "false")
         }
+
+    /** Desktop's pin: a flag on the session row, so both apps (and every phone) see the same pins. */
+    suspend fun setPinned(sessionId: String, profile: String, pinned: Boolean) {
+        // Session edits are guarded: they name the revision they were made against and carry an idempotency id.
+        // Another app editing the session in between moves the revision on; read it again and retry once.
+        try {
+            patchPinned(sessionId, profile, pinned)
+        } catch (e: HermesHttpException) {
+            if (e.code != 409) throw e
+            patchPinned(sessionId, profile, pinned)
+        }
+    }
+
+    private suspend fun patchPinned(sessionId: String, profile: String, pinned: Boolean) {
+        val snapshot = get<MutationSnapshot>("api/sessions/$sessionId/mutation-snapshot") { addQueryParameter("profile", profile) }
+        val body = buildJsonObject {
+            put("pinned", pinned); put("profile", profile)
+            put("request_id", "android-" + UUID.randomUUID()); put("expected_revision", snapshot.runtimeRevision)
+        }.toString()
+        val url = base.newBuilder().addPathSegments("api/sessions/$sessionId").build()
+        execute(Request.Builder().url(url).patch(body.toRequestBody("application/json".toMediaType())).build())
+    }
 
     /** A file on the gateway's disk (a `MEDIA:` delivery), with the same guards Desktop's file browser gets. */
     suspend fun readFile(path: String, profile: String): GatewayFile {

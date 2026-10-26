@@ -3,7 +3,9 @@ package io.github.k02miu.hermesmobile.ui
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.DropdownMenu
@@ -67,6 +70,7 @@ fun SessionListPane(
     selectedKey: String?,
     onSelectProfile: (String) -> Unit,
     onOpen: (SessionTarget) -> Unit,
+    onPin: (SessionSummary, Boolean) -> Unit,
     onRefresh: () -> Unit,
     themeMode: ThemeMode,
     onThemeMode: (ThemeMode) -> Unit,
@@ -105,16 +109,19 @@ fun SessionListPane(
                     BotChatCard(avatars[state.profile], selected = selectedKey == target.key, onClick = { onOpen(target) })
                 }
             }
-            item(key = "header") {
-                Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 16.dp, bottom = 8.dp)) {
-                    Text("会話", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = HermesColors.TextSoft)
-                    Spacer(Modifier.weight(1f))
-                    Text("${state.sessions.size} 件", fontSize = 12.sp, color = HermesColors.Muted)
+            // Desktop's pins first, then everything else by recency.
+            val (pinned, rest) = state.sessions.partition { it.pinned }
+            if (pinned.isNotEmpty()) {
+                item(key = "pinned-header") { SectionHeader("ピン留め", pinned.size) }
+                items(pinned, key = { "pinned-" + it.id }) { s ->
+                    val target = SessionTarget(state.profile, s.id, s.displayTitle)
+                    SessionRow(s, selected = selectedKey == target.key, onClick = { onOpen(target) }, onPin = { onPin(s, it) })
                 }
             }
-            items(state.sessions, key = { it.id }) { s ->
+            item(key = "header") { SectionHeader("会話", rest.size) }
+            items(rest, key = { it.id }) { s ->
                 val target = SessionTarget(state.profile, s.id, s.displayTitle)
-                SessionRow(s, selected = selectedKey == target.key, onClick = { onOpen(target) })
+                SessionRow(s, selected = selectedKey == target.key, onClick = { onOpen(target) }, onPin = { onPin(s, it) })
             }
         }
     }
@@ -211,13 +218,31 @@ private fun BotChatCard(avatar: ImageBitmap?, selected: Boolean, onClick: () -> 
 }
 
 @Composable
-private fun SessionRow(s: SessionSummary, selected: Boolean, onClick: () -> Unit) {
+private fun SectionHeader(title: String, count: Int) {
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 16.dp, bottom = 8.dp)) {
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = HermesColors.TextSoft)
+        Spacer(Modifier.weight(1f))
+        Text("$count 件", fontSize = 12.sp, color = HermesColors.Muted)
+    }
+}
+
+/** A long press offers pinning, the same pin Desktop shows. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SessionRow(s: SessionSummary, selected: Boolean, onClick: () -> Unit, onPin: (Boolean) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
     Column(
         Modifier.fillMaxWidth().background(if (selected) HermesColors.SurfaceHigh else HermesColors.Rail, RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
+            .combinedClickable(onClick = onClick, onLongClick = { menu = true }, onLongClickLabel = "ピン留めの操作")
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (s.pinned) {
+                Icon(Icons.Default.PushPin, "ピン留め", tint = HermesColors.Accent, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+            }
             Text(s.displayTitle, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (s.isActive) Badge("実行中", HermesColors.WorkingSurface, HermesColors.Working)
         }
@@ -226,6 +251,14 @@ private fun SessionRow(s: SessionSummary, selected: Boolean, onClick: () -> Unit
             Spacer(Modifier.weight(1f))
             Text(relative(s.activeAt), fontSize = 11.sp, color = HermesColors.Muted, fontFamily = MonoFamily)
         }
+    }
+    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        DropdownMenuItem(
+            text = { Text(if (s.pinned) "ピン留めを外す" else "ピン留めする") },
+            leadingIcon = { Icon(Icons.Default.PushPin, null) },
+            onClick = { menu = false; onPin(!s.pinned) },
+        )
+    }
     }
     HorizontalDivider(color = HermesColors.Rail, thickness = 2.dp)
 }

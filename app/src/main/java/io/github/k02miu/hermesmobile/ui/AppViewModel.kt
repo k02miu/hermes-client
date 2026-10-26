@@ -165,6 +165,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Pins or unpins at once on screen, then on the gateway (where Desktop reads the same flag). */
+    fun setPinned(session: SessionSummary, pinned: Boolean) {
+        val conn = connection ?: return
+        val profile = session.profile.ifBlank { _list.value.profile }
+        fun mark(value: Boolean) = _list.update { s -> s.copy(sessions = s.sessions.map { if (it.id == session.id) it.copy(pinned = value) else it }) }
+        mark(pinned)
+        viewModelScope.launch {
+            runCatching { conn.api.setPinned(session.id, profile, pinned) }
+                .onSuccess { refresh() }
+                .onFailure { e ->
+                    mark(!pinned)
+                    _list.update { it.copy(error = "ピン留めを変えられませんでした（${e.message}）") }
+                }
+        }
+    }
+
     private fun watchSessionChanges() {
         val conn = connection ?: return
         eventsJob?.cancel()

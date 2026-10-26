@@ -1,5 +1,6 @@
 package io.github.k02miu.hermesmobile.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.k02miu.hermesmobile.HermesApplication
@@ -7,6 +8,7 @@ import io.github.k02miu.hermesmobile.data.GatewayEvent
 import io.github.k02miu.hermesmobile.data.RpcException
 import io.github.k02miu.hermesmobile.data.ServerRequest
 import io.github.k02miu.hermesmobile.data.StoredMessage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -14,11 +16,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -45,7 +50,13 @@ sealed interface ChatItem {
 
     data class User(override val key: String, val text: String, val pending: Boolean = false) : ChatItem
     data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
-    data class Tool(override val key: String, val name: String, val detail: String, val state: ToolState) : ChatItem
+    /** [args] is the call's arguments as JSON; [output] the readable result, once it has finished. */
+    data class Tool(
+        override val key: String, val name: String, val args: String, val state: ToolState,
+        val output: String? = null, val durationS: Double? = null, val diff: String? = null,
+        /** Epoch seconds the call was made, for the elapsed time while it runs. */
+        val startedAt: Double? = null,
+    ) : ChatItem
     data class Notice(override val key: String, val text: String) : ChatItem
 }
 
@@ -75,6 +86,17 @@ sealed interface PendingPrompt {
     ) : PendingPrompt
 }
 
+/**
+ * A background process this session started (`terminal` with `background: true`), from `process.list`:
+ * typically a watcher Hermes left running while it waits for Claude Code or a CI run to finish.
+ */
+data class BackgroundProcess(
+    val id: String, val command: String, val status: String, val startedAt: Double?,
+    val notifyOnComplete: Boolean, val watchPatterns: List<String>, val output: String, val exitCode: Int? = null,
+) {
+    val running get() = status == "running"
+}
+
 data class SessionState(
     val title: String,
     val items: List<ChatItem> = emptyList(),
@@ -82,7 +104,11 @@ data class SessionState(
     val running: Boolean = false,
     val loading: Boolean = true,
     val error: String? = null,
-)
+    val processes: List<BackgroundProcess> = emptyList(),
+) {
+    /** Idle, but a process will wake Hermes when it ends (or prints what it watches for). */
+    val waiting get() = !running && processes.any { it.running && (it.notifyOnComplete || it.watchPatterns.isNotEmpty()) }
+}
 
 class SessionViewModel(
     private val app: HermesApplication,
@@ -160,7 +186,12 @@ class SessionViewModel(
         val id = storedId ?: return
         runCatching { conn.api.messages(id, target.profile, limit = 60) }
             .onSuccess { resp ->
-                val history = resp.messages.flatMap(::toItems)
+                // Results are rows of their own (role=tool), tied to their call by id.
+                val results = resp.messages.filter { it.role == "tool" && it.toolCallId != null }.associate { it.toolCallId!! to it.content }
+                // A call with no result yet is still running (a `sleep 270; check…` wait, say) while the turn is.
+                val lastCalls = resp.messages.lastOrNull { it.role == "assistant" && it.toolCalls is JsonArray }?.id
+                val history = resp.messages.flatMap { toItems(it, results, runningCalls = it.id == lastCalls && _state.value.running) }
+                wakeCalls = backgroundCalls(history)
                 _state.update { s ->
                     // Keep live rows that history has not caught up with yet (an answer still streaming), unless the
                     // turn is over: then a streaming row is one whose completion was missed while disconnected.
@@ -187,6 +218,56 @@ class SessionViewModel(
     }
 
     suspend fun readFile(path: String) = conn.api.readFile(path, target.profile)
+
+    /** Polls the session's background processes while the pane is on screen, as Desktop's status stack does. */
+    suspend fun watchProcesses() {
+        while (true) {
+            loadProcesses()
+            delay(PROCESS_POLL_MS)
+        }
+    }
+
+    /** Background `terminal` calls seen in history: command → (notify when done, output patterns that wake Hermes). */
+    private var wakeCalls: Map<String, Pair<Boolean, List<String>>> = emptyMap()
+
+    private suspend fun loadProcesses() {
+        val id = liveId ?: return
+        val res = runCatching {
+            conn.socket.request("process.list", buildJsonObject { put("profile", target.profile); put("session_id", id) }).jsonObject
+        }.onFailure { Log.w(TAG, "process.list failed", it) }.getOrNull() ?: return
+        val processes = (res["processes"] as? JsonArray)?.mapNotNull { row ->
+            val o = row as? JsonObject ?: return@mapNotNull null
+            val command = o.str("command").orEmpty()
+            // The live gateway's rows may leave out the wake-up flags; the call that started the process has them.
+            val call = wakeCalls.entries.firstOrNull { (cmd, _) -> command.isNotEmpty() && cmd.startsWith(command.take(200)) }?.value
+            BackgroundProcess(
+                id = o.str("session_id") ?: return@mapNotNull null,
+                command = command,
+                status = o.str("status") ?: "running",
+                startedAt = o["started_epoch"]?.jsonPrimitive?.doubleOrNull
+                    ?: o["uptime_seconds"]?.jsonPrimitive?.longOrNull?.let { System.currentTimeMillis() / 1000.0 - it },
+                notifyOnComplete = o.bool("notify_on_complete") == true || call?.first == true,
+                watchPatterns = (o["watch_patterns"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    ?: call?.second.orEmpty(),
+                output = o.str("output_tail") ?: o.str("output_preview").orEmpty(),
+                exitCode = o["exit_code"]?.jsonPrimitive?.intOrNull,
+            )
+        }.orEmpty()
+            .sortedWith(compareByDescending<BackgroundProcess> { it.running }.thenByDescending { it.startedAt ?: 0.0 })
+        _state.update { it.copy(processes = processes) }
+    }
+
+    fun killProcess(processId: String) {
+        val id = liveId ?: return
+        viewModelScope.launch {
+            runCatching {
+                conn.socket.request("process.kill", buildJsonObject {
+                    put("profile", target.profile); put("session_id", id); put("process_id", processId)
+                })
+            }.onFailure { e -> notice("止められませんでした（${e.message}）") }
+            loadProcesses()
+        }
+    }
 
     fun interrupt() {
         val id = liveId ?: return
@@ -281,18 +362,27 @@ class SessionViewModel(
                 viewModelScope.launch { loadHistory() }
             }
             "tool.start" -> {
-                val detail = p.str("preview") ?: p.str("args_text") ?: ""
+                val args = (p["args"] as? JsonObject)?.takeIf { it.isNotEmpty() }?.toString() ?: p.str("args_text") ?: p.str("preview") ?: ""
                 _state.update {
-                    it.copy(items = it.items + ChatItem.Tool("tool-" + (p.str("tool_id") ?: e.seq), p.str("name") ?: "tool", detail.take(160), ToolState.Running))
+                    it.copy(items = it.items + ChatItem.Tool("tool-" + (p.str("tool_id") ?: e.seq), p.str("name") ?: "tool", args, ToolState.Running,
+                        startedAt = System.currentTimeMillis() / 1000.0))
                 }
             }
             "tool.complete" -> {
                 val key = "tool-" + (p.str("tool_id") ?: "")
+                val result = p["result"]
                 _state.update { s ->
                     s.copy(items = s.items.map {
-                        if (it is ChatItem.Tool && it.key == key) it.copy(state = ToolState.Done, detail = p.str("summary")?.take(160) ?: it.detail) else it
+                        if (it is ChatItem.Tool && it.key == key) it.copy(
+                            state = if (toolFailed(result)) ToolState.Failed else ToolState.Done,
+                            output = toolOutput(result) ?: p.str("result_text") ?: p.str("summary"),
+                            durationS = p["duration_s"]?.jsonPrimitive?.doubleOrNull,
+                            diff = p.str("inline_diff")?.takeIf { d -> d.isNotBlank() },
+                        ) else it
                     })
                 }
+                // A call that started a background process shows up in the process list right away.
+                if (p.str("name") == "terminal") viewModelScope.launch { loadProcesses() }
             }
             "approval.request", "clarify.request" -> parsePrompt(p)?.let { prompt ->
                 _state.update { s -> s.copy(prompts = s.prompts.filterNot { it.promptId == prompt.promptId } + prompt) }
@@ -328,7 +418,7 @@ class SessionViewModel(
         }
     }
 
-    private fun toItems(m: StoredMessage): List<ChatItem> {
+    private fun toItems(m: StoredMessage, results: Map<String, JsonElement?>, runningCalls: Boolean): List<ChatItem> {
         if (m.displayKind == "hidden") return emptyList()
         val key = "m-${m.id}"
         return when (m.role) {
@@ -338,7 +428,14 @@ class SessionViewModel(
                 (m.toolCalls as? JsonArray)?.forEachIndexed { i, call ->
                     val fn = (call as? JsonObject)?.get("function") as? JsonObject
                     val name = fn?.str("name") ?: return@forEachIndexed
-                    add(ChatItem.Tool("$key-t$i", name, fn.str("arguments")?.take(160) ?: "", ToolState.Done))
+                    val callId = (call as JsonObject).str("id")
+                    val result = callId?.let(results::get)
+                    val state = when {
+                        runningCalls && callId !in results -> ToolState.Running
+                        toolFailed(result) -> ToolState.Failed
+                        else -> ToolState.Done
+                    }
+                    add(ChatItem.Tool("$key-t$i", name, fn.str("arguments").orEmpty(), state, output = toolOutput(result), startedAt = m.timestamp))
                 }
             }
             else -> emptyList()
@@ -354,6 +451,19 @@ class SessionViewModel(
         }?.takeIf { it.isNotBlank() }
     }
 }
+
+private fun backgroundCalls(items: List<ChatItem>): Map<String, Pair<Boolean, List<String>>> =
+    items.filterIsInstance<ChatItem.Tool>().filter { it.name == "terminal" }.mapNotNull { tool ->
+        val a = toolArgs(tool.args) ?: return@mapNotNull null
+        if (a.bool("background") != true) return@mapNotNull null
+        val command = a.str("command") ?: return@mapNotNull null
+        val notify = a.bool("notify") == true || a.bool("notify_on_complete") == true
+        val patterns = (a["watch_patterns"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+        command to (notify to patterns)
+    }.toMap()
+
+private const val PROCESS_POLL_MS = 10_000L
+private const val TAG = "HermesSession"
 
 private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull

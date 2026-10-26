@@ -30,6 +30,7 @@ data class StoredMessage(
     @SerialName("display_kind") val displayKind: String? = null,
     @SerialName("tool_calls") val toolCalls: kotlinx.serialization.json.JsonElement? = null,
     @SerialName("tool_name") val toolName: String? = null,
+    @SerialName("tool_call_id") val toolCallId: String? = null,
     val timestamp: Double? = null,
 )
 
@@ -65,6 +66,9 @@ data class SessionSlice(val sessions: List<SessionSummary> = emptyList())
 
 @Serializable
 data class SidebarResponse(val recents: SessionSlice = SessionSlice())
+
+@Serializable
+data class MutationSnapshot(@SerialName("runtime_revision") val runtimeRevision: Long = 0)
 
 @Serializable
 data class WsTicket(val ticket: String, @SerialName("ttl_seconds") val ttlSeconds: Int = 30)
