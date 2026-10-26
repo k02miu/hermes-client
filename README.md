@@ -108,7 +108,11 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 
 ```sh
 ./gradlew :app:assembleDebug     # debug 版（パッケージ名 io.github.k02miu.hermesmobile.debug、アプリ名「Hermes Dev」）
+./gradlew :app:testDebugUnitTest # 単体テスト（端末なしで JVM 上で動きます）
 ```
+
+- 単体テストは `app/src/test` にあります。ツール表示の整形、履歴から画面の行への変換、バックグラウンド処理の一覧の読み取り、`MEDIA:` 行の切り出し、Hermes の JSON の読み込みを確かめています。
+- GitHub Actions は、push と pull request のたびに単体テストを流してから debug 版を作ります。リリースのときも先にテストを流します。
 
 - JDK 17 と Android SDK（compileSdk 37）が必要です。
 - debug 版はリリース版と別のアプリとして入るので、並べて使えます。

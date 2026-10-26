@@ -186,11 +186,7 @@ class SessionViewModel(
         val id = storedId ?: return
         runCatching { conn.api.messages(id, target.profile, limit = 60) }
             .onSuccess { resp ->
-                // Results are rows of their own (role=tool), tied to their call by id.
-                val results = resp.messages.filter { it.role == "tool" && it.toolCallId != null }.associate { it.toolCallId!! to it.content }
-                // A call with no result yet is still running (a `sleep 270; check…` wait, say) while the turn is.
-                val lastCalls = resp.messages.lastOrNull { it.role == "assistant" && it.toolCalls is JsonArray }?.id
-                val history = resp.messages.flatMap { toItems(it, results, runningCalls = it.id == lastCalls && _state.value.running) }
+                val history = historyItems(resp.messages, running = _state.value.running)
                 wakeCalls = backgroundCalls(history)
                 _state.update { s ->
                     // Keep live rows that history has not caught up with yet (an answer still streaming), unless the
@@ -235,25 +231,7 @@ class SessionViewModel(
         val res = runCatching {
             conn.socket.request("process.list", buildJsonObject { put("profile", target.profile); put("session_id", id) }).jsonObject
         }.onFailure { Log.w(TAG, "process.list failed", it) }.getOrNull() ?: return
-        val processes = (res["processes"] as? JsonArray)?.mapNotNull { row ->
-            val o = row as? JsonObject ?: return@mapNotNull null
-            val command = o.str("command").orEmpty()
-            // The live gateway's rows may leave out the wake-up flags; the call that started the process has them.
-            val call = wakeCalls.entries.firstOrNull { (cmd, _) -> command.isNotEmpty() && cmd.startsWith(command.take(200)) }?.value
-            BackgroundProcess(
-                id = o.str("session_id") ?: return@mapNotNull null,
-                command = command,
-                status = o.str("status") ?: "running",
-                startedAt = o["started_epoch"]?.jsonPrimitive?.doubleOrNull
-                    ?: o["uptime_seconds"]?.jsonPrimitive?.longOrNull?.let { System.currentTimeMillis() / 1000.0 - it },
-                notifyOnComplete = o.bool("notify_on_complete") == true || call?.first == true,
-                watchPatterns = (o["watch_patterns"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                    ?: call?.second.orEmpty(),
-                output = o.str("output_tail") ?: o.str("output_preview").orEmpty(),
-                exitCode = o["exit_code"]?.jsonPrimitive?.intOrNull,
-            )
-        }.orEmpty()
-            .sortedWith(compareByDescending<BackgroundProcess> { it.running }.thenByDescending { it.startedAt ?: 0.0 })
+        val processes = parseProcesses(res, wakeCalls, now = System.currentTimeMillis() / 1000.0)
         _state.update { it.copy(processes = processes) }
     }
 
@@ -417,54 +395,7 @@ class SessionViewModel(
             else -> null
         }
     }
-
-    private fun toItems(m: StoredMessage, results: Map<String, JsonElement?>, runningCalls: Boolean): List<ChatItem> {
-        if (m.displayKind == "hidden") return emptyList()
-        val key = "m-${m.id}"
-        return when (m.role) {
-            "user" -> listOfNotNull(textOf(m)?.let { ChatItem.User(key, it) })
-            "assistant" -> buildList {
-                textOf(m)?.let { add(ChatItem.Assistant(key, it)) }
-                (m.toolCalls as? JsonArray)?.forEachIndexed { i, call ->
-                    val fn = (call as? JsonObject)?.get("function") as? JsonObject
-                    val name = fn?.str("name") ?: return@forEachIndexed
-                    val callId = (call as JsonObject).str("id")
-                    val result = callId?.let(results::get)
-                    val state = when {
-                        runningCalls && callId !in results -> ToolState.Running
-                        toolFailed(result) -> ToolState.Failed
-                        else -> ToolState.Done
-                    }
-                    add(ChatItem.Tool("$key-t$i", name, fn.str("arguments").orEmpty(), state, output = toolOutput(result), startedAt = m.timestamp))
-                }
-            }
-            else -> emptyList()
-        }
-    }
-
-    private fun textOf(m: StoredMessage): String? {
-        m.displayContent?.takeIf { it.isNotBlank() }?.let { return it }
-        return when (val c = m.content) {
-            is JsonPrimitive -> c.contentOrNull
-            is JsonArray -> c.mapNotNull { part -> (part as? JsonObject)?.takeIf { it.str("type") == "text" }?.str("text") }.joinToString("\n")
-            else -> null
-        }?.takeIf { it.isNotBlank() }
-    }
 }
-
-private fun backgroundCalls(items: List<ChatItem>): Map<String, Pair<Boolean, List<String>>> =
-    items.filterIsInstance<ChatItem.Tool>().filter { it.name == "terminal" }.mapNotNull { tool ->
-        val a = toolArgs(tool.args) ?: return@mapNotNull null
-        if (a.bool("background") != true) return@mapNotNull null
-        val command = a.str("command") ?: return@mapNotNull null
-        val notify = a.bool("notify") == true || a.bool("notify_on_complete") == true
-        val patterns = (a["watch_patterns"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
-        command to (notify to patterns)
-    }.toMap()
 
 private const val PROCESS_POLL_MS = 10_000L
 private const val TAG = "HermesSession"
-
-private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
-private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
-private fun JsonObject.choices(): List<String> = (this["choices"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()

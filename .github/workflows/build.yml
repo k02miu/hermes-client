@@ -27,8 +27,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: unit-test-report-${{ github.sha }}
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 14
 
       - uses: actions/upload-artifact@v6
         with:
