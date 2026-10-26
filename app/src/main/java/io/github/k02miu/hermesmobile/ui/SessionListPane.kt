@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BrightnessAuto
@@ -70,9 +71,11 @@ fun SessionListPane(
     themeMode: ThemeMode,
     onThemeMode: (ThemeMode) -> Unit,
     modifier: Modifier = Modifier,
+    onHide: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxSize().background(HermesColors.Rail)) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = if (onHide != null) 4.dp else 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onHide != null) IconButton(onClick = onHide) { Icon(Icons.AutoMirrored.Filled.MenuOpen, "一覧を閉じる", tint = HermesColors.Muted) }
             Row(
                 Modifier.background(HermesColors.Surface, RoundedCornerShape(16.dp)).border(1.dp, HermesColors.Line, RoundedCornerShape(16.dp))
                     .padding(horizontal = 10.dp, vertical = 6.dp),

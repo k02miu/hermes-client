@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -83,6 +84,8 @@ import kotlinx.serialization.json.jsonPrimitive
 @Composable
 fun SessionPane(
     vm: SessionViewModel, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?, modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var preview by rememberSaveable { mutableStateOf<String?>(null) }
@@ -92,7 +95,7 @@ fun SessionPane(
     }
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
-        Header(state, profileLabel, avatar, onBack)
+        Header(state, profileLabel, avatar, onBack, leading, actions)
         Box(Modifier.weight(1f)) {
             Transcript(state, onAnswer = vm::answer, onOpenMedia = { preview = it })
             if (state.loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = HermesColors.Working)
@@ -113,12 +116,16 @@ fun SessionPane(
 }
 
 @Composable
-private fun Header(state: SessionState, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?) {
+private fun Header(
+    state: SessionState, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?,
+    leading: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(start = if (onBack != null) 4.dp else 20.dp, end = 16.dp, top = 12.dp, bottom = 10.dp),
+        Modifier.fillMaxWidth().padding(start = if (onBack != null || leading != null) 4.dp else 20.dp, end = 8.dp, top = 12.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") }
+        leading?.invoke()
         BotAvatar(32, avatar)
         Spacer(Modifier.size(10.dp))
         Column(Modifier.weight(1f)) {
@@ -126,6 +133,8 @@ private fun Header(state: SessionState, profileLabel: String, avatar: ImageBitma
             Text(profileLabel, fontSize = 11.sp, color = HermesColors.Muted, fontFamily = MonoFamily)
         }
         if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
+        Spacer(Modifier.size(8.dp))
+        actions()
     }
     Box(Modifier.fillMaxWidth().heightIn(min = 1.dp).background(HermesColors.Line))
 }
