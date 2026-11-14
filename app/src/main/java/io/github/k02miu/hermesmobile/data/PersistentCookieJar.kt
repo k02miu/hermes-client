@@ -48,9 +48,10 @@ class PersistentCookieJar(
         }
     }
 
-    fun clear() {
-        synchronized(cookies) { cookies.clear() }
-        scope.launch { settings.clearCookies() }
+    /** Signs out of one server: every cookie its host was sent. */
+    fun clear(url: HttpUrl) {
+        synchronized(cookies) { cookies.removeAll { it.matches(url) } }
+        persist()
     }
 
     fun hasSession(): Boolean = synchronized(cookies) {

@@ -1,9 +1,11 @@
 # Hermes Mobile
 
 [Hermes Agent](https://github.com/NousResearch/hermes-agent) を Android から使うためのクライアントです。
-Mac で動いている Hermes Desktop と同じ会話に、Tailscale 経由で参加します。Desktop で始めた会話をスマホで続けたり、作業中の Hermes からの質問にスマホで答えたりできます。
+Mac や Linux で動いている Hermes の Bot に、Tailscale 経由でつなぎます。Hermes Desktop と同じ会話に参加するので、Desktop で始めた会話をスマホで続けたり、作業中の Bot からの質問にスマホで答えたりできます。
 
-- Bot（Hermes のプロファイル）ごとの会話一覧と、新しい会話
+- Bot（Hermes のプロファイル）の一覧。複数のサーバー（Mac と Linux など）の Bot を 1 つの一覧で扱えます
+- Bot を押すとその Bot の常設の会話（Bot Chat）が開きます。ほかの会話と新しい会話は 1 つ先にあります
+- Bot Desktop（Bot が操作している Linux の画面）を見る・代わりに操作する
 - 返答のリアルタイム表示（Markdown、表、コード）
 - Hermes からの選択肢・質問への回答（複数選択や、Desktop から始めた会話でまとめて来る質問にも対応）、コマンド実行の承認
 - `MEDIA:` で渡されたファイルのプレビュー（HTML・画像・テキスト）
@@ -14,8 +16,10 @@ Mac で動いている Hermes Desktop と同じ会話に、Tailscale 経由で�
 
 ## 必要なもの
 
-- **Mac**：Hermes Desktop（Hermes Agent が `~/.hermes` に入っている状態）と、Tailscale の Mac アプリ（サインイン済み・MagicDNS 有効）
-- **スマホ**：Android 12 以上と、Tailscale のアプリ（Mac と同じ tailnet に参加済み）
+- **サーバー**（Hermes が動いているマシン。いくつあっても構いません）
+  - Mac：Hermes Desktop（Hermes Agent が `~/.hermes` に入っている状態）と、Tailscale の Mac アプリ（サインイン済み・MagicDNS 有効）
+  - Linux：Hermes Agent（`~/.hermes`、gateway がサービスとして動いている状態）、Tailscale（サインイン済み・MagicDNS 有効）、systemd
+- **スマホ**：Android 12 以上と、Tailscale のアプリ（サーバーと同じ tailnet に参加済み）
 
 通信は tailnet の中だけで完結し、インターネットには公開しません。
 
@@ -36,29 +40,55 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 
 入るものの詳細と外し方は [mac/README.md](mac/README.md) にあります。
 
-### 2. スマホ
+### 2. Linux（Linux の Hermes の Bot も使うとき）
+
+Linux のマシンで次を実行します。
+
+```sh
+sudo tailscale set --operator=$USER   # 最初の 1 回だけ。sudo なしで tailscale serve を変えられるようにします
+curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/hermes-mobile-linux.tar.gz | tar xz
+./hermes-mobile-linux/install.sh
+```
+
+- 初めて入れたときは、終わったあと gateway を一度再起動してください（`systemctl --user restart hermes-gateway`）。
+- 最後に、スマホで追加するサーバーの URL が表示されます。
+- スマホは gateway（`hermes-gateway` のサービス）につながります。
+
+入るものの詳細と外し方は [linux/README.md](linux/README.md) にあります。
+
+### 3. スマホ
 
 1. [Releases](https://github.com/k02miu/hermes-client/releases/latest) から `hermes-mobile-<バージョン>.apk` をスマホに落として入れます（「提供元不明のアプリ」の許可を求められたら許可します）。
 2. Tailscale のアプリが接続中であることを確かめます。
 3. Hermes Mobile を開き、「サーバー URL」に Mac で表示された URL を入れて「Tailscale でログイン」を押します。
 
 サーバーの URL は覚えておくので、次からはそのまま開けます。
+2 台目からは、一覧の右上のサーバーのボタン →「サーバーを追加」で同じように足します。外すのも同じ場所です。
 
 ## 使い方
 
-### 会話を選ぶ
+### Bot を選ぶ
 
-- 上の「Bot」で、使う Hermes のプロファイルを切り替えます。
-- 「Bot Chat」は Bot ごとの常設の会話です。その下に最近の会話が並びます（定期実行の会話は出しません）。
-- 右上の「＋」で新しい会話を始めます。
+- 最初の画面は Bot の一覧です。サーバーごとにまとまって並びます。
+- Bot を押すと、その Bot の常設の会話「Bot Chat」が開きます。
+- 行には、いちばん最近の会話の題名と時刻が出ます。「実行中」は、その Bot のどれかの会話に 5 分以内に動きがあったという印です。
+- Bot Desktop が動いている Bot には画面のボタンが出ます。押すとその画面が開きます。
+- Bot を長押しすると「会話の一覧」「新しい会話」「Bot Desktop」を選べます。
+- サーバーにつながらないときは、サーバー名の横に「つなぎ直す」が出ます。ほかのサーバーの Bot はそのまま使えます。
+
+### ほかの会話を開く
+
+- 会話の右上の吹き出しのボタンで、その Bot の会話の一覧が出ます。Bot Chat、ピン留め、最近の会話の順です（定期実行の会話は出しません）。
+- 「新しい会話」で新しい会話を始めます。
 - Desktop でピン留めした会話は「ピン留め」にまとまります。会話を長押しすると、スマホからもピン留めを付けたり外したりできます（Desktop にもそのまま反映されます）。
-- 会話に付く「実行中」は、Hermes 側で 5 分以内に動きがあったという印です。
 
 ### 会話する
 
 - 下の欄に指示を書いて送ります。Hermes が作業中に送った指示は順番に処理されます。
 - 作業中は送信ボタンが停止ボタンになり、押すと止められます。
 - Desktop で同じ会話を開いていれば、どちらで送った内容も両方に出ます。
+- 返答を上へさかのぼって読んでいるあいだ、その返答のもとになった自分の指示が会話の上に小さく出ます。スクロールして別の指示への返答に入ると切り替わります。押すと全文が開きます。
+- 入力欄の上に、いま使っているモデル名が出ます。押すと、その Bot がサインインしているプロバイダーのモデルから選び直せます（名前で絞り込めます）。切り替えはその会話だけに効き、Bot の既定のモデルは変わりません。作業中に切り替えたときは、次の返答から効きます。
 
 ### ツールの中身を見る
 
@@ -83,6 +113,21 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 - コマンド実行の承認は、画面下からシートで出ます。
 - Desktop から始めた会話で、スマホがその会話を開く前に出た質問は、スマホには出ません（Hermes が後から来た相手に送り直さないため）。Desktop で答えてください。
 
+### Bot Desktop を見る・操作する
+
+Bot Desktop は、Bot がブラウザなどを操作するための Linux の画面です（Linux のサーバーの Bot だけにあります）。
+
+- 会話の右上の画面のボタン、または一覧の Bot の画面のボタンで開きます。止まっているときは「起動する」で起動できます。
+- 開いただけでは見ているだけで、Bot の操作は止まりません。2 本指で拡大・移動、1 本指で移動できます。
+- 「操作する」を押すと、あなたが操作する番になります。Bot はそのあいだ手を止めて待ちます。ログインや認証コードの入力など、Bot に任せられないところで使います。
+  - 画面を押すとクリック、長押しで右クリック、押したまま動かすとドラッグです。
+  - 文字は下の欄に打って送ると、画面のカーソルの位置に入力されます（日本語や貼り付けも使えます）。欄が空のまま送ると Enter です。
+  - Enter、⌫、Tab、Esc、矢印、スクロールは欄の下のボタンで送ります。
+- 終わったら「Bot に返す」を押します。画面を閉じたときも Bot に返ります。
+- アプリを裏に回しただけ（パスワード管理アプリを見に行くなど）では返しません。戻ると続きから操作できます。
+- Desktop など別の端末が操作しているときは「引き継ぐ」で自分の番にできます。
+- タブレットでは、会話の隣の列に画面が開きます。
+
 ### ファイルを見る
 
 返答の中で Hermes が `MEDIA:<パス>` で渡したファイルは、カードで表示されます。「プレビュー」を押すと、HTML・画像・テキストをその場で開きます。HTML の中のリンクはブラウザで開きます。
@@ -91,17 +136,20 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 
 - 右上のボタンで、テーマを「端末の設定に合わせる／ライト／ダーク」から選べます。
 - 折りたたみスマホを開くと、左に一覧、右に会話の 2 画面になります。閉じると 1 画面です。
-- タブレットでは会話を横に並べられます（縦向きで 2 列、横向きで 3 列まで）。
+- 折りたたみスマホを開いた状態やタブレットでは、会話や Bot Desktop を横に並べられます（折りたたみスマホで 2 列、タブレットで 3 列まで）。
   - 会話の右上の「列を増やす」で列を足し、「✕」で閉じます。
-  - 一覧で選んだ会話は、最後に触った列（上に色の線が付いた列）に開きます。
+  - 一覧で選んだ Bot は、最後に触った列（上に色の線が付いた列）に開きます。
   - 一覧は左上のボタンで畳めます。畳んでいるときは、空いた列に一覧が出ます。
+  - 折りたたみスマホでは、2 列にすると一覧は自動で畳まれます。左上のボタンで呼び出すと会話の上に重なって出て、Bot を選ぶと閉じます。
   - 向きを変えて列が収まらなくなったときは、最後に触った列から遠い列を閉じます。
 - 表は列の中身に合わせて幅を決め、画面に収まらないときは横にスクロールします。
 
 ### うまくいかないとき
 
-- **つながらない／サインインできない**：スマホの Tailscale が接続中か、Mac がスリープしていないか、Hermes Desktop が起動しているかを確かめてください。
+- **つながらない／サインインできない**：スマホの Tailscale が接続中か、サーバーがスリープしていないか、Hermes が起動しているかを確かめてください。
 - **Mac 側の状態**：ログは `~/Library/Logs/HermesMobile/` にあります。`install.sh` はもう一度実行しても大丈夫です（スマホのサインインは切れません）。
+- **Linux 側の状態**：`journalctl --user -u 'hermes-mobile-*'` でログが見られます。
+- **Bot Desktop のボタンが出ない**：その Bot のサーバーが Linux でないか、画面用のパッケージが入っていません。パッケージは Hermes Desktop の Bot の画面から入れられます。
 - **最新が出ない**：アプリを一度裏に回して戻すか、会話を開き直すと取り直します。通信が切れたときは自動でつなぎ直します。
 
 ## 開発
@@ -111,7 +159,7 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 ./gradlew :app:testDebugUnitTest # 単体テスト（端末なしで JVM 上で動きます）
 ```
 
-- 単体テストは `app/src/test` にあります。ツール表示の整形、履歴から画面の行への変換、バックグラウンド処理の一覧の読み取り、`MEDIA:` 行の切り出し、Hermes の JSON の読み込みを確かめています。
+- 単体テストは `app/src/test` にあります。ツール表示の整形、履歴から画面の行への変換、バックグラウンド処理の一覧の読み取り、`MEDIA:` 行の切り出し、Hermes の JSON の読み込み、Bot の一覧の組み立て、Bot Desktop の画面データ（RFB）の読み取り、上に出す指示の選び方、モデル一覧の読み込みを確かめています。
 - GitHub Actions は、push と pull request のたびに単体テストを流してから debug 版を作ります。リリースのときも先にテストを流します。
 
 - JDK 17 と Android SDK（compileSdk 37）が必要です。
@@ -119,7 +167,7 @@ curl -fsSL https://github.com/k02miu/hermes-client/releases/latest/download/herm
 
 ### リリース
 
-`v` で始まるタグを push すると、GitHub Actions が署名付きの APK と Mac 用の `hermes-mobile-mac.tar.gz` を作り、Releases に載せます。
+`v` で始まるタグを push すると、GitHub Actions が署名付きの APK と、Mac 用の `hermes-mobile-mac.tar.gz`、Linux 用の `hermes-mobile-linux.tar.gz` を作り、Releases に載せます。
 
 ```sh
 git tag -a v0.1.3 -m "Hermes Mobile 0.1.3"

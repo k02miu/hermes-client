@@ -97,6 +97,8 @@ data class BackgroundProcess(
     val running get() = status == "running"
 }
 
+data class ModelConfirm(val provider: String, val model: String, val message: String)
+
 data class SessionState(
     val title: String,
     val items: List<ChatItem> = emptyList(),
@@ -105,6 +107,11 @@ data class SessionState(
     val loading: Boolean = true,
     val error: String? = null,
     val processes: List<BackgroundProcess> = emptyList(),
+    /** The model this conversation runs on, and the provider serving it. */
+    val model: String = "",
+    val provider: String = "",
+    /** A model pick the gateway wants confirmed first (an expensive one), with its reason. */
+    val modelConfirm: ModelConfirm? = null,
 ) {
     /** Idle, but a process will wake Hermes when it ends (or prints what it watches for). */
     val waiting get() = !running && processes.any { it.running && (it.notifyOnComplete || it.watchPatterns.isNotEmpty()) }
@@ -158,10 +165,14 @@ class SessionViewModel(
                 _state.update { it.copy(loading = false, error = null) }
                 return
             }
-            val title = (snap["info"] as? JsonObject)?.str("title")?.takeIf { it.isNotBlank() } ?: target.title
+            val info = snap["info"] as? JsonObject
+            val title = info?.str("title")?.takeIf { it.isNotBlank() } ?: target.title
             val prompts = (snap["prompts"] as? JsonArray)?.mapNotNull { parsePrompt(it.jsonObject) }.orEmpty()
             _state.update {
-                it.copy(title = title, prompts = prompts, running = snap.bool("running") ?: false, error = null)
+                it.copy(
+                    title = title, prompts = prompts, running = snap.bool("running") ?: false, error = null,
+                    model = info?.str("model") ?: it.model, provider = info?.str("provider") ?: it.provider,
+                )
             }
             loadHistory()
         } catch (e: Exception) {
@@ -214,6 +225,40 @@ class SessionViewModel(
     }
 
     suspend fun readFile(path: String) = conn.api.readFile(path, target.profile)
+
+    /** The providers this bot is signed in to and their models, for the picker. */
+    suspend fun modelOptions(): ModelOptions {
+        val id = liveId ?: throw IllegalStateException("会話を開いている途中です")
+        return parseModelOptions(conn.socket.request("model.options", buildJsonObject { put("profile", target.profile); put("session_id", id) }).jsonObject)
+    }
+
+    /**
+     * Switches this conversation's model, as Desktop's picker does: `--session` keeps the bot's default as it is.
+     * While a turn runs the gateway holds the pick for the next one. An expensive model comes back as a
+     * question first ([SessionState.modelConfirm]); answering it calls this again with [confirmed].
+     */
+    fun setModel(provider: String, model: String, confirmed: Boolean = false) {
+        val id = liveId ?: return
+        _state.update { it.copy(modelConfirm = null) }
+        viewModelScope.launch {
+            runCatching {
+                conn.socket.request("config.set", buildJsonObject {
+                    put("profile", target.profile); put("session_id", id); put("key", "model")
+                    put("value", "$model --provider $provider --session"); put("confirm_expensive_model", confirmed)
+                }).jsonObject
+            }.onSuccess { res ->
+                if (res.bool("confirm_required") == true) {
+                    _state.update { it.copy(modelConfirm = ModelConfirm(provider, model, res.str("confirm_message") ?: res.str("warning") ?: "")) }
+                    return@onSuccess
+                }
+                _state.update { it.copy(model = res.str("value")?.takeIf { v -> v.isNotBlank() } ?: model, provider = provider) }
+                res.str("warning")?.takeIf { it.isNotBlank() }?.let(::notice)
+                if (res.bool("deferred") == true) notice("モデルは次の返答から $model に切り替わります")
+            }.onFailure { e -> notice("モデルを変えられませんでした（${e.message}）") }
+        }
+    }
+
+    fun dismissModelConfirm() = _state.update { it.copy(modelConfirm = null) }
 
     /** Polls the session's background processes while the pane is on screen, as Desktop's status stack does. */
     suspend fun watchProcesses() {
@@ -370,7 +415,11 @@ class SessionViewModel(
             // A server request answered elsewhere, timed out or interrupted.
             "request.cancel" -> p.str("id")?.let(::removePrompt)
             "session.info" -> _state.update { s ->
-                s.copy(running = p.bool("running") ?: s.running, title = p.str("title")?.takeIf { it.isNotBlank() } ?: s.title)
+                s.copy(
+                    running = p.bool("running") ?: s.running, title = p.str("title")?.takeIf { it.isNotBlank() } ?: s.title,
+                    model = p.str("model")?.takeIf { it.isNotBlank() } ?: s.model,
+                    provider = p.str("provider")?.takeIf { it.isNotBlank() } ?: s.provider,
+                )
             }
             "session.title" -> p.str("title")?.let { t -> _state.update { it.copy(title = t) } }
             "error" -> p.str("message")?.let(::notice)

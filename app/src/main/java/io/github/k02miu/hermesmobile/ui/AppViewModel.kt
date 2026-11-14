@@ -2,6 +2,8 @@ package io.github.k02miu.hermesmobile.ui
 
 import android.app.Application
 import android.graphics.BitmapFactory
+import android.os.Parcelable
+import android.util.Log
 import android.util.Base64
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -14,15 +16,24 @@ import io.github.k02miu.hermesmobile.data.SessionSummary
 import io.github.k02miu.hermesmobile.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.parcelize.IgnoredOnParcel
+import kotlinx.parcelize.Parcelize
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -30,30 +41,90 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
-sealed interface AuthState {
-    data object Loading : AuthState
-    data class NeedsLogin(val serverUrl: String, val error: String? = null, val busy: Boolean = false) : AuthState
-    data class Ready(val serverUrl: String, val user: String) : AuthState
+enum class ServerStatus { Connecting, Ready, Failed }
+
+/** A bot is a Hermes profile on one server; the same profile name can exist on two servers. */
+@Parcelize
+data class BotRef(val server: String, val profile: String) : Parcelable {
+    @IgnoredOnParcel val key = "$server|$profile"
 }
 
-data class ListState(
-    val profiles: List<Profile> = emptyList(),
-    val profile: String = "",
+/** What a bot's row says about its Bot Desktop; only bots whose host can run one have it. */
+data class ScreenBadge(val profileKey: String, val running: Boolean, val humanHolds: Boolean)
+
+/** Where a bot's standing chat stands: the sidebar's session list leaves that chat out, so it is read on its own. */
+data class BotChatSummary(val preview: String, val lastAt: Double, val running: Boolean) {
+    companion object {
+        /**
+         * "Running" as the sidebar means it for other conversations: something happened within five minutes.
+         * (`session.list` has a `running` of its own, but that only says the chat is loaded in the gateway.)
+         */
+        fun of(preview: String, lastAt: Double, now: Double) = BotChatSummary(preview, lastAt, running = lastAt > 0 && now - lastAt < 300)
+    }
+}
+
+data class Bot(
+    val ref: BotRef,
+    val profile: Profile,
     val sessions: List<SessionSummary> = emptyList(),
-    val refreshing: Boolean = false,
+    val screen: ScreenBadge? = null,
+    val chat: BotChatSummary? = null,
+) {
+    val label get() = profile.label
+    val running get() = chat?.running == true || sessions.any { it.isActive }
+    val latest get() = sessions.maxByOrNull { it.activeAt }
+    /** When anything last happened with this bot, in its standing chat or any other conversation. */
+    val lastAt get() = maxOf(chat?.lastAt ?: 0.0, latest?.activeAt ?: 0.0)
+    /** One line saying what that was: whichever of the two is newer. */
+    val summary: String get() {
+        val other = latest
+        val line = if (chat != null && chat.preview.isNotBlank() && chat.lastAt >= (other?.activeAt ?: 0.0)) chat.preview else other?.displayTitle
+        return line ?: profile.description.ifBlank { profile.model }
+    }
+}
+
+data class ServerState(
+    val url: String,
+    val status: ServerStatus = ServerStatus.Connecting,
+    val user: String = "",
+    val bots: List<Bot> = emptyList(),
     val error: String? = null,
-)
+) {
+    val host get() = hostOf(url)
+}
+
+data class AppState(
+    /** False until the saved servers have been read. */
+    val loaded: Boolean = false,
+    val servers: List<ServerState> = emptyList(),
+    val refreshing: Boolean = false,
+    val notice: String? = null,
+) {
+    fun bot(ref: BotRef): Bot? = servers.firstOrNull { it.url == ref.server }?.bots?.firstOrNull { it.ref == ref }
+}
+
+/** The "add a server" form: shown on first run, and from the server list afterwards. */
+data class AddServerState(val url: String = "", val busy: Boolean = false, val error: String? = null)
+
+/** `https://kamiya-mac.tail1234.ts.net` → `kamiya-mac`. */
+fun hostOf(url: String): String = url.removePrefix("https://").removePrefix("http://").substringBefore('/').substringBefore('.')
+
+fun normalizeServerUrl(raw: String): String {
+    val trimmed = raw.trim().trimEnd('/')
+    if (trimmed.isEmpty()) return ""
+    return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+}
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as HermesApplication
 
-    private val _auth = MutableStateFlow<AuthState>(AuthState.Loading)
-    val auth: StateFlow<AuthState> = _auth
+    private val _state = MutableStateFlow(AppState())
+    val state: StateFlow<AppState> = _state
 
-    private val _list = MutableStateFlow(ListState())
-    val list: StateFlow<ListState> = _list
+    private val _adding = MutableStateFlow<AddServerState?>(null)
+    val adding: StateFlow<AddServerState?> = _adding
 
-    /** Profile name → the bot's avatar (`<profile home>/assets/avatar.*`), when it has one. */
+    /** Bot key → the bot's avatar (`<profile home>/assets/avatar.*`), when it has one. */
     private val _avatars = MutableStateFlow<Map<String, ImageBitmap>>(emptyMap())
     val avatars: StateFlow<Map<String, ImageBitmap>> = _avatars
 
@@ -65,141 +136,246 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { app.settings.setTheme(mode.name) }
     }
 
-    private var eventsJob: Job? = null
+    private val watchers = mutableMapOf<String, Job>()
+    private val reloads = mutableMapOf<String, MutableSharedFlow<Unit>>()
 
-    init {
-        viewModelScope.launch {
-            app.cookies.load()
-            val url = app.settings.serverUrl.first()
-            // A connect link may have started a login meanwhile; leave that one in charge.
-            if (_auth.value != AuthState.Loading) return@launch
-            if (url.isNullOrBlank()) _auth.value = AuthState.NeedsLogin("") else signIn(url, interactive = false)
-        }
+    private val loading: Job = viewModelScope.launch {
+        app.cookies.load()
+        val urls = app.settings.servers()
+        _state.update { it.copy(loaded = true, servers = urls.map(::ServerState)) }
+        urls.forEach { url -> launch { connect(url, interactive = false) } }
     }
 
-    val connection get() = (auth.value as? AuthState.Ready)?.let { app.connection(it.serverUrl) }
+    // ---- servers ----------------------------------------------------------------------------
 
-    fun login(rawUrl: String) {
-        val url = normalize(rawUrl)
+    fun startAdding() { _adding.value = AddServerState() }
+    fun cancelAdding() { _adding.value = null }
+
+    /** Signs in to a new server and keeps it; a connect link (`hermesmobile://connect?url=`) lands here too. */
+    fun addServer(rawUrl: String) {
+        val url = normalizeServerUrl(rawUrl)
         if (url.isEmpty()) {
-            _auth.value = AuthState.NeedsLogin(rawUrl, "サーバー URL を入力してください"); return
+            _adding.value = AddServerState(rawUrl, error = "サーバー URL を入力してください"); return
         }
-        _auth.value = AuthState.NeedsLogin(url, busy = true)
-        viewModelScope.launch { signIn(url, interactive = true) }
+        _adding.value = AddServerState(url, busy = true)
+        viewModelScope.launch {
+            loading.join()
+            if (_state.value.servers.any { it.url == url }) {
+                _adding.value = null
+                connect(url, interactive = true)
+                return@launch
+            }
+            try {
+                val user = signIn(url)
+                _state.update { it.copy(servers = it.servers + ServerState(url, user = user)) }
+                _adding.value = null
+                app.settings.setServers(_state.value.servers.map { it.url })
+                connect(url, interactive = true)
+            } catch (e: Exception) {
+                app.forget(url)
+                _adding.value = AddServerState(url, error = describe(e))
+            }
+        }
     }
 
-    fun logout() {
-        app.cookies.clear()
-        connection?.socket?.close()
-        _auth.value = AuthState.NeedsLogin((auth.value as? AuthState.Ready)?.serverUrl ?: "")
+    fun removeServer(url: String) {
+        watchers.remove(url)?.cancel()
+        reloads.remove(url)
+        app.forget(url)
+        _state.update { it.copy(servers = it.servers.filterNot { s -> s.url == url }) }
+        viewModelScope.launch { app.settings.setServers(_state.value.servers.map { it.url }) }
+    }
+
+    fun retry(url: String) {
+        viewModelScope.launch { connect(url, interactive = true) }
     }
 
     /** Reuses the stored session; when it has lapsed, the Tailscale provider signs in again with no prompt. */
-    private suspend fun signIn(url: String, interactive: Boolean) {
+    private suspend fun signIn(url: String): String {
         val api = app.connection(url).api
+        val me = runCatching { api.me() }.getOrElse { e ->
+            if (e is HermesHttpException && e.code == 401) {
+                api.loginWithTailscale(); api.me()
+            } else throw e
+        }
+        return me.displayName.ifBlank { me.userId }
+    }
+
+    private suspend fun connect(url: String, interactive: Boolean) {
+        updateServer(url) { it.copy(status = ServerStatus.Connecting, error = null) }
         try {
-            val me = runCatching { api.me() }.getOrElse { e ->
-                if (e is HermesHttpException && e.code == 401) {
-                    api.loginWithTailscale(); api.me()
-                } else throw e
+            val user = signIn(url)
+            val profiles = app.connection(url).api.profiles()
+            updateServer(url) { s ->
+                s.copy(status = ServerStatus.Ready, user = user, error = null, bots = profiles.map { p ->
+                    val ref = BotRef(url, p.name)
+                    s.bots.firstOrNull { it.ref == ref }?.copy(profile = p) ?: Bot(ref, p)
+                })
             }
-            app.settings.setServerUrl(url)
-            _auth.value = AuthState.Ready(url, me.displayName.ifBlank { me.userId })
-            loadProfiles()
-            watchSessionChanges()
+            watch(url)
+            loadActivity(url)
+            loadAvatars(url)
         } catch (e: Exception) {
-            _auth.value = AuthState.NeedsLogin(url, describe(e, interactive))
+            updateServer(url) { it.copy(status = ServerStatus.Failed, error = describe(e).takeIf { interactive || e !is HermesHttpException || e.code != 401 } ?: "サインインし直してください") }
         }
     }
 
-    private suspend fun loadProfiles() {
-        val conn = connection ?: return
-        val profiles = runCatching { conn.api.profiles() }.getOrElse {
-            _list.update { s -> s.copy(error = describe(it, true)) }; return
-        }
-        val saved = app.settings.profile.first()
-        val chosen = profiles.firstOrNull { it.name == saved }?.name
-            ?: profiles.firstOrNull { !it.isDefault }?.name
-            ?: profiles.firstOrNull()?.name ?: ""
-        _list.update { it.copy(profiles = profiles, profile = chosen) }
-        refresh()
-        loadAvatars(profiles.map { it.name })
-    }
+    private fun updateServer(url: String, change: (ServerState) -> ServerState) =
+        _state.update { it.copy(servers = it.servers.map { s -> if (s.url == url) change(s) else s }) }
 
-    private fun loadAvatars(names: List<String>) {
-        val conn = connection ?: return
+    private fun updateBot(ref: BotRef, change: (Bot) -> Bot) =
+        updateServer(ref.server) { s -> s.copy(bots = s.bots.map { if (it.ref == ref) change(it) else it }) }
+
+    // ---- what each bot is doing ---------------------------------------------------------------
+
+    /** Back from the background or a pull on the refresh button: failed servers try again, the rest reload. */
+    fun refresh() {
+        if (!_state.value.loaded) return
+        _state.update { it.copy(refreshing = true) }
         viewModelScope.launch {
-            names.filterNot { it in _avatars.value }.forEach { name ->
+            coroutineScope {
+                _state.value.servers.forEach { s ->
+                    launch { if (s.status == ServerStatus.Ready) loadActivity(s.url) else if (s.status == ServerStatus.Failed) connect(s.url, interactive = false) }
+                }
+            }
+            _state.update { it.copy(refreshing = false) }
+        }
+    }
+
+    /** Every bot's recent conversations (for "running" and the latest title) and its Bot Desktop, side by side. */
+    private suspend fun loadActivity(url: String) = coroutineScope {
+        val conn = app.connection(url)
+        val bots = _state.value.servers.firstOrNull { it.url == url }?.bots.orEmpty()
+        bots.map { bot ->
+            async {
+                runCatching { conn.api.recentSessions(bot.ref.profile) }
+                    .onSuccess { sessions ->
+                        updateBot(bot.ref) { it.copy(sessions = sessions.sortedByDescending { s -> s.activeAt }) }
+                        // The server answers again: whatever an earlier attempt complained about is over.
+                        if (bots.first() === bot) updateServer(url) { it.copy(error = null) }
+                    }
+                    .onFailure { e ->
+                        Log.w("Hermes", "sessions of ${bot.ref.profile} failed", e)
+                        if (bots.first() === bot) updateServer(url) { it.copy(error = describe(e)) }
+                    }
+            }
+            async {
+                // The standing chat is hidden from every list; an exact-title lookup finds it without opening it.
                 runCatching {
-                    val res = conn.socket.request("profiles.get_asset", buildJsonObject { put("name", name); put("asset", "avatar") }).jsonObject
+                    val found = conn.socket.request("session.list", buildJsonObject { put("profile", bot.ref.profile); put("title", SessionTarget.BOT_CHAT) })
+                        .jsonObject["sessions"]?.let { it as? kotlinx.serialization.json.JsonArray }?.firstOrNull() as? JsonObject ?: return@runCatching null
+                    val id = found.str("resolved_id") ?: found.str("id") ?: return@runCatching null
+                    val last = chatPreview(conn.api.messages(id, bot.ref.profile, limit = 12).messages)
+                    BotChatSummary.of(last?.first.orEmpty(), last?.second ?: 0.0, now = System.currentTimeMillis() / 1000.0)
+                }.onSuccess { chat -> updateBot(bot.ref) { it.copy(chat = chat) } }
+            }
+            async {
+                val status = runCatching {
+                    conn.socket.request("display.status", buildJsonObject { put("profile", bot.ref.profile) }).jsonObject
+                }.getOrNull()
+                updateBot(bot.ref) { it.copy(screen = status?.let(::screenBadge)) }
+            }
+        }.awaitAll()
+    }
+
+    private fun loadAvatars(url: String) {
+        val conn = app.connection(url)
+        val bots = _state.value.servers.firstOrNull { it.url == url }?.bots.orEmpty()
+        viewModelScope.launch {
+            bots.filterNot { it.ref.key in _avatars.value }.forEach { bot ->
+                runCatching {
+                    val res = conn.socket.request("profiles.get_asset", buildJsonObject { put("name", bot.ref.profile); put("asset", "avatar") }).jsonObject
                     if ((res["found"] as? JsonPrimitive)?.booleanOrNull != true) return@runCatching
                     val data = (res["data"] as? JsonPrimitive)?.contentOrNull ?: return@runCatching
                     val bytes = Base64.decode(data.substringAfter("base64,"), Base64.DEFAULT)
                     val bitmap = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } ?: return@runCatching
-                    _avatars.update { it + (name to bitmap.asImageBitmap()) }
+                    _avatars.update { it + (bot.ref.key to bitmap.asImageBitmap()) }
                 }
             }
         }
     }
 
-    fun selectProfile(name: String) {
-        if (name == _list.value.profile) return
-        _list.update { it.copy(profile = name, sessions = emptyList()) }
-        viewModelScope.launch { app.settings.setProfile(name) }
-        refresh()
-    }
-
-    fun refresh() {
-        val conn = connection ?: return
-        val profile = _list.value.profile.ifBlank { return }
-        _list.update { it.copy(refreshing = true) }
-        viewModelScope.launch {
-            runCatching { conn.api.recentSessions(profile) }
-                .onSuccess { sessions ->
-                    _list.update {
-                        if (it.profile != profile) it
-                        else it.copy(sessions = sessions.sortedByDescending { s -> s.activeAt }, refreshing = false, error = null)
+    /** Follows one server's socket: conversations changing anywhere, and Bot Desktops starting, stopping or changing hands. */
+    private fun watch(url: String) {
+        if (watchers[url]?.isActive == true) return
+        val conn = app.connection(url)
+        val reload = reloads.getOrPut(url) { MutableSharedFlow(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST) }
+        watchers[url] = viewModelScope.launch {
+            launch { runCatching { conn.socket.ensureConnected() } }
+            // A turn fires several of these in a row; one reload shortly after the last is enough.
+            launch { reload.collectLatest { delay(400); loadActivity(url) } }
+            // Nothing is replayed after a drop, so whatever happened meanwhile is read again.
+            launch { conn.socket.connected.collect { reload.tryEmit(Unit) } }
+            conn.socket.events.collect { e ->
+                when (e.type) {
+                    "sessions.changed", "session.title" -> reload.tryEmit(Unit)
+                    "display.status" -> screenBadge(e.payload)?.let { badge -> updateScreen(url, badge.profileKey) { badge } }
+                    "display.lease" -> {
+                        val key = e.payload.str("profile_key") ?: return@collect
+                        val human = (e.payload["lease"] as? JsonObject)?.str("holder") == "human"
+                        updateScreen(url, key) { it.copy(humanHolds = human) }
                     }
                 }
-                .onFailure { e -> _list.update { it.copy(refreshing = false, error = describe(e, true)) } }
+            }
         }
+    }
+
+    private fun updateScreen(url: String, profileKey: String, change: (ScreenBadge) -> ScreenBadge) = updateServer(url) { s ->
+        s.copy(bots = s.bots.map { b -> if (b.screen?.profileKey == profileKey) b.copy(screen = change(b.screen)) else b })
     }
 
     /** Pins or unpins at once on screen, then on the gateway (where Desktop reads the same flag). */
-    fun setPinned(session: SessionSummary, pinned: Boolean) {
-        val conn = connection ?: return
-        val profile = session.profile.ifBlank { _list.value.profile }
-        fun mark(value: Boolean) = _list.update { s -> s.copy(sessions = s.sessions.map { if (it.id == session.id) it.copy(pinned = value) else it }) }
+    fun setPinned(ref: BotRef, session: SessionSummary, pinned: Boolean) {
+        val conn = app.connection(ref.server)
+        fun mark(value: Boolean) = updateBot(ref) { b -> b.copy(sessions = b.sessions.map { if (it.id == session.id) it.copy(pinned = value) else it }) }
         mark(pinned)
         viewModelScope.launch {
-            runCatching { conn.api.setPinned(session.id, profile, pinned) }
-                .onSuccess { refresh() }
+            runCatching { conn.api.setPinned(session.id, session.profile.ifBlank { ref.profile }, pinned) }
+                .onSuccess { reloads[ref.server]?.tryEmit(Unit) }
                 .onFailure { e ->
                     mark(!pinned)
-                    _list.update { it.copy(error = "ピン留めを変えられませんでした（${e.message}）") }
+                    _state.update { it.copy(notice = "ピン留めを変えられませんでした（${e.message}）") }
                 }
         }
     }
 
-    private fun watchSessionChanges() {
-        val conn = connection ?: return
-        eventsJob?.cancel()
-        eventsJob = viewModelScope.launch {
-            launch { runCatching { conn.socket.ensureConnected() } }
-            conn.socket.events.collect { if (it.type == "sessions.changed" || it.type == "session.title") refresh() }
-        }
-    }
+    fun clearNotice() = _state.update { it.copy(notice = null) }
 
-    private fun normalize(raw: String): String {
-        val trimmed = raw.trim().trimEnd('/')
-        if (trimmed.isEmpty()) return ""
-        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
-    }
-
-    private fun describe(e: Throwable, interactive: Boolean): String? = when {
-        !interactive && e is HermesHttpException && e.code == 401 -> null
+    private fun describe(e: Throwable): String = when {
         e is HermesHttpException && e.code == 403 -> "この Tailscale アカウントは許可されていません"
+        e is HermesHttpException && e.code == 401 -> "サインインできませんでした。サーバー側のセットアップを確かめてください"
         e is HermesHttpException -> "サーバーがエラーを返しました（${e.code}）"
-        else -> "接続できませんでした。Tailscale が ON か確認してください"
+        else -> "接続できませんでした。Tailscale が ON か、サーバーが起動しているか確認してください"
     }
+}
+
+/** `display.status` (the RPC result or the event payload) → the row's badge; null where the host cannot run a screen. */
+fun screenBadge(status: JsonObject): ScreenBadge? {
+    if ((status["supported"] as? JsonPrimitive)?.booleanOrNull != true) return null
+    if ((status["installed"] as? JsonPrimitive)?.booleanOrNull != true) return null
+    val key = status.str("profile_key") ?: return null
+    return ScreenBadge(
+        profileKey = key,
+        running = (status["running"] as? JsonPrimitive)?.booleanOrNull == true,
+        humanHolds = (status["lease"] as? JsonObject)?.str("holder") == "human",
+    )
+}
+
+/**
+ * The newest thing said in a conversation as one line, with when: a reply from the bot, or a prompt the user typed.
+ * Tool results, empty tool-calling turns and injected notices (a background process ending) say nothing a list
+ * row can use and are passed over. [messages] is oldest first, as the gateway returns it.
+ */
+fun chatPreview(messages: List<io.github.k02miu.hermesmobile.data.StoredMessage>): Pair<String, Double>? {
+    for (m in messages.asReversed()) {
+        if (m.role != "assistant" && m.role != "user") continue
+        if (m.role == "user" && m.displayKind != null) continue
+        val text = (m.displayContent ?: (m.content as? JsonPrimitive)?.takeIf { it.isString }?.content).orEmpty()
+        val line = text.lineSequence().map { it.trim().trimStart('#', '>', '-', '*', ' ').replace("**", "").replace("`", "") }.firstOrNull { it.isNotBlank() } ?: continue
+        if (line == "[SILENT]") continue // the bot's way of answering nothing
+        // The time of the last message of all, so a turn still calling tools reads as recent.
+        val at = messages.lastOrNull()?.timestamp ?: m.timestamp ?: 0.0
+        return (if (m.role == "user") "あなた: $line" else line) to at
+    }
+    return null
 }

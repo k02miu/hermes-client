@@ -1,0 +1,84 @@
+"""Keep `tailscale serve` pointed at this machine's Hermes gateway.
+
+The gateway listens on 127.0.0.1 at a port that changes on every restart, so this polls its pid and
+port and re-points the HTTPS proxy whenever it moves.
+
+Only the gateway will do. A Linux host may also run a backend that Hermes Desktop started over SSH,
+but Hermes exempts that one from the sign-in gate (it takes Desktop's per-spawn token and nothing
+else), so the phone's Tailscale sign-in would be accepted and every request after it refused.
+
+Run with Hermes's own interpreter (the systemd unit does): ~/.hermes/hermes-agent/venv/bin/python -I.
+"""
+import json
+import os
+import re
+import subprocess
+import time
+import urllib.request
+from pathlib import Path
+
+HERMES_HOME = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+TAILSCALE = os.environ.get("TAILSCALE") or "tailscale"
+INTERVAL_SECONDS = 10
+
+
+def log(message: str) -> None:
+    print(time.strftime("%Y-%m-%d %H:%M:%S"), message, flush=True)
+
+
+def alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def gateway_port():
+    """The gateway's loopback listener: the pid from its lifecycle file, the port from the socket table."""
+    try:
+        life = json.loads((HERMES_HOME / "state" / "gateway.lifecycle.json").read_text())
+    except (OSError, ValueError):
+        return None
+    pid = life.get("pid")
+    if life.get("phase") != "running" or not alive(pid):
+        return None
+    try:
+        table = subprocess.run(["ss", "-Hltnp"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in table.splitlines():
+        if f"pid={pid}," in line:
+            found = re.search(r"127\.0\.0\.1:(\d+)\s", line)
+            if found:
+                return int(found.group(1))
+    return None
+
+
+def answers(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def main() -> None:
+    log("start")
+    applied = None
+    while True:
+        port = gateway_port()
+        if port and not answers(port):
+            port = None
+        if port and port != applied:
+            done = subprocess.run([TAILSCALE, "serve", "--bg", "--https=443", f"http://127.0.0.1:{port}"],
+                                  capture_output=True, text=True)
+            if done.returncode == 0:
+                log(f"serve -> 127.0.0.1:{port}")
+                applied = port
+            else:
+                log(f"tailscale serve failed for port {port}: {done.stderr.strip()[:200]}")
+        time.sleep(INTERVAL_SECONDS)
+
+
+main()

@@ -83,6 +83,24 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 
 @Composable
 fun SessionPane(
@@ -94,6 +112,7 @@ fun SessionPane(
     var preview by rememberSaveable { mutableStateOf<String?>(null) }
     var toolKey by rememberSaveable { mutableStateOf<String?>(null) }
     var showProcesses by rememberSaveable { mutableStateOf(false) }
+    var showModels by rememberSaveable { mutableStateOf(false) }
     val lifecycle = LocalLifecycleOwner.current
     LaunchedEffect(vm) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { vm.watchProcesses() } }
     LifecycleResumeEffect(vm) {
@@ -113,12 +132,25 @@ fun SessionPane(
         }
         state.error?.let { Text(it, color = HermesColors.Danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
         ProcessStrip(state.processes, onOpen = { showProcesses = true })
-        Composer(running = state.running, onSend = vm::send, onStop = vm::interrupt)
+        Composer(running = state.running, model = state.model, onPickModel = { showModels = true }, onSend = vm::send, onStop = vm::interrupt)
     }
     // Looked up by key so a call still running fills in as its result arrives.
     toolKey?.let { key ->
         val tool = state.items.firstOrNull { it.key == key } as? ChatItem.Tool
         if (tool == null) toolKey = null else ToolSheet(tool, onDismiss = { toolKey = null })
+    }
+    if (showModels) ModelSheet(
+        current = state.provider to state.model, load = vm::modelOptions,
+        onPick = { provider, model -> showModels = false; vm.setModel(provider, model) }, onDismiss = { showModels = false },
+    )
+    state.modelConfirm?.let { ask ->
+        AlertDialog(
+            onDismissRequest = vm::dismissModelConfirm,
+            title = { Text("${ask.model} に切り替えますか") },
+            text = { Text(ask.message.ifBlank { "このモデルは料金が高めです。" }) },
+            confirmButton = { TextButton(onClick = { vm.setModel(ask.provider, ask.model, confirmed = true) }) { Text("切り替える", color = HermesColors.Accent) } },
+            dismissButton = { TextButton(onClick = vm::dismissModelConfirm) { Text("やめる") } },
+        )
     }
     if (showProcesses) ProcessSheet(state.processes, onKill = { vm.killProcess(it.id) }, onDismiss = { showProcesses = false })
     state.prompts.filterIsInstance<PendingPrompt.Approval>().firstOrNull()?.let { approval ->
@@ -143,8 +175,9 @@ private fun Header(
         BotAvatar(32, avatar)
         Spacer(Modifier.size(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(state.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(profileLabel, fontSize = 11.sp, color = HermesColors.Muted, fontFamily = MonoFamily)
+            // The bot is who you are talking to; which of its conversations this is comes second.
+            Text(profileLabel, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(state.title, fontSize = 11.sp, color = HermesColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
         else if (state.waiting) Badge("待機中", HermesColors.AccentSurface, HermesColors.Accent)
@@ -176,6 +209,20 @@ private fun Transcript(
     }
     // On a tablet the pane is far wider than a comfortable line: keep the conversation in a centred column,
     // padded rather than narrowed so the whole pane still scrolls.
+    // The prompt of the turn being read, once its own bubble has scrolled off the top. Rows are laid out newest
+    // first, so "above" is a higher index: walk up from the topmost visible row to the nearest prompt.
+    val layout by rememberUpdatedState(rows to clarifies.size)
+    val pinned by remember(list) {
+        derivedStateOf {
+            val (current, offset) = layout
+            val top = list.layoutInfo.visibleItemsInfo.maxByOrNull { it.index } ?: return@derivedStateOf null
+            val index = pinnedPromptIndex(current, firstRow = current.lastIndex - (top.index - offset)) ?: return@derivedStateOf null
+            val isTopRow = index == current.lastIndex - (top.index - offset)
+            // Still on screen in full: the bubble speaks for itself.
+            if (isTopRow && top.offset + top.size <= list.layoutInfo.viewportEndOffset) null
+            else (current[index] as TranscriptRow.Single).item as ChatItem.User
+        }
+    }
     BoxWithConstraints {
         val side = maxOf(16.dp, (maxWidth - READING_WIDTH) / 2)
         LazyColumn(
@@ -192,6 +239,111 @@ private fun Transcript(
                         is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
                         is ChatItem.Tool -> ToolRow(item, onOpenTool)
                         is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
+                    }
+                }
+            }
+        }
+        PinnedPrompt(pinned, Modifier.align(Alignment.TopCenter).padding(horizontal = side - 4.dp, vertical = 6.dp))
+    }
+}
+
+/**
+ * Floats over the top of the conversation. Two lines by default, since the point is to recall what was asked
+ * without giving up the screen; a tap opens the whole prompt and another closes it.
+ */
+@Composable
+private fun PinnedPrompt(prompt: ChatItem.User?, modifier: Modifier) {
+    var expandedKey by remember { mutableStateOf<String?>(null) }
+    AnimatedContent(
+        targetState = prompt, modifier = modifier, contentKey = { it?.key },
+        transitionSpec = { (fadeIn() + slideInVertically { -it / 2 }) togetherWith (fadeOut() + slideOutVertically { -it / 2 }) },
+        label = "pinned prompt",
+    ) { shown ->
+        if (shown == null) Box(Modifier.fillMaxWidth())
+        else {
+            val expanded = expandedKey == shown.key
+            val shape = RoundedCornerShape(14.dp)
+            Row(
+                Modifier.fillMaxWidth().shadow(6.dp, shape).background(HermesColors.SurfaceHigh, shape).border(1.dp, HermesColors.Line, shape)
+                    .clip(shape).clickable(onClickLabel = if (expanded) "たたむ" else "全文を見る") { expandedKey = if (expanded) null else shown.key }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Box(Modifier.padding(top = 5.dp).size(width = 3.dp, height = 14.dp).background(HermesColors.Accent, RoundedCornerShape(2.dp)))
+                Spacer(Modifier.size(10.dp))
+                Text(
+                    shown.text.trim(), fontSize = 13.sp, lineHeight = 20.sp, color = HermesColors.Text,
+                    maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).then(if (expanded) Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()) else Modifier),
+                )
+            }
+        }
+    }
+}
+
+/** The signed-in providers and their models, with a filter: some providers list dozens. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelSheet(current: Pair<String, String>, load: suspend () -> ModelOptions, onPick: (String, String) -> Unit, onDismiss: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var options by remember { mutableStateOf<ModelOptions?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    // Open on the provider in use; the rest stay folded until asked for (or until a search looks inside them).
+    var opened by remember { mutableStateOf(setOf(current.first)) }
+    LaunchedEffect(Unit) {
+        runCatching { load() }.onSuccess { options = it }.onFailure { error = "モデルの一覧を取れませんでした（${it.message}）" }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = HermesColors.Surface) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            Text("モデル", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text("この会話だけに効きます。Bot の既定のモデルは変わりません。", fontSize = 12.sp, color = HermesColors.Muted, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
+            OutlinedTextField(
+                value = query, onValueChange = { query = it }, placeholder = { Text("モデル名で絞り込む", fontSize = 14.sp) },
+                singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+            )
+        }
+        val loaded = options
+        when {
+            error != null -> Text(error!!, color = HermesColors.Danger, fontSize = 13.sp, modifier = Modifier.padding(20.dp))
+            loaded == null -> Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = HermesColors.Working) }
+            else -> {
+                val needle = query.trim()
+                // The provider in use first, the rest in the order Hermes lists them.
+                val providers = loaded.providers.sortedByDescending { it.slug == current.first }
+                LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 28.dp)) {
+                    providers.forEach { provider ->
+                        val matches = if (needle.isEmpty()) provider.models else provider.models.filter { it.contains(needle, ignoreCase = true) }
+                        if (matches.isEmpty()) return@forEach
+                        val open = needle.isNotEmpty() || provider.slug in opened
+                        item(key = "provider-" + provider.slug) {
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .clickable { opened = if (provider.slug in opened) opened - provider.slug else opened + provider.slug }
+                                    .padding(horizontal = 8.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(provider.name.ifBlank { provider.slug }, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = HermesColors.TextSoft, modifier = Modifier.weight(1f))
+                                Text("${matches.size} 件", fontSize = 12.sp, color = HermesColors.Muted)
+                                Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = HermesColors.Muted, modifier = Modifier.padding(start = 6.dp).size(20.dp))
+                            }
+                        }
+                        if (open) {
+                            // Hermes's own picks for the provider lead, then the rest as listed.
+                            val ordered = matches.filter { it in provider.featured } + matches.filterNot { it in provider.featured }
+                            items(ordered, key = { provider.slug + "/" + it }) { model ->
+                                val selected = provider.slug == current.first && model == current.second
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) HermesColors.SurfaceHigh else HermesColors.Surface)
+                                        .clickable { onPick(provider.slug, model) }.padding(horizontal = 12.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(model, fontSize = 14.sp, fontFamily = MonoFamily, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    if (selected) Icon(Icons.Default.Check, "使用中", tint = HermesColors.Accent, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -360,7 +512,7 @@ private fun describeAnswer(raw: String): String =
     runCatching { Json.parseToJsonElement(raw).jsonArray.joinToString("、") { it.jsonPrimitive.content } }.getOrNull() ?: raw
 
 @Composable
-private fun Composer(running: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun Composer(running: Boolean, model: String, onPickModel: () -> Unit, onSend: (String) -> Unit, onStop: () -> Unit) {
     var text by rememberSaveable { mutableStateOf("") }
     // The pane transition hands focus to the first focusable it finds, which would raise the
     // keyboard on every open. The field only accepts focus once the user has touched it.
@@ -372,6 +524,16 @@ private fun Composer(running: Boolean, onSend: (String) -> Unit, onStop: () -> U
         if (running) {
             Text("Hermes が作業中です。送った指示は順番に処理されます", fontSize = 12.sp, color = HermesColors.Muted,
                 modifier = Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 4.dp, bottom = 8.dp))
+        }
+        // Which model answers, one tap from changing it: with a bot per client the right model differs per bot.
+        if (model.isNotBlank()) Row(Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 2.dp, bottom = 6.dp)) {
+            Row(
+                Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "モデルを選ぶ", onClick = onPickModel).padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(model, fontSize = 12.sp, color = HermesColors.TextSoft, fontFamily = MonoFamily, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                Icon(Icons.Default.ArrowDropDown, null, tint = HermesColors.Muted, modifier = Modifier.size(18.dp))
+            }
         }
         Row(Modifier.widthIn(max = READING_WIDTH), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(

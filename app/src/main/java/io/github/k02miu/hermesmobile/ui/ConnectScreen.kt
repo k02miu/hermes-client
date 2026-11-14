@@ -23,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,8 +40,8 @@ import androidx.compose.ui.unit.sp
 import io.github.k02miu.hermesmobile.ui.theme.HermesColors
 
 @Composable
-fun ConnectScreen(state: AuthState.NeedsLogin, onLogin: (String) -> Unit) {
-    var url by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
+fun ConnectScreen(state: AddServerState, onLogin: (String) -> Unit, onCancel: (() -> Unit)? = null) {
+    var url by remember(state.url) { mutableStateOf(state.url) }
     Box(Modifier.fillMaxSize().background(HermesColors.Ground).safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 48.dp),
@@ -50,15 +51,15 @@ fun ConnectScreen(state: AuthState.NeedsLogin, onLogin: (String) -> Unit) {
                 Modifier.size(48.dp).background(HermesColors.Accent, RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.AutoMirrored.Filled.Chat, null, tint = HermesColors.OnAccent) }
-            Text("Hermes に接続", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text(if (onCancel == null) "Hermes に接続" else "サーバーを追加", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             Text(
-                "Mac の Hermes に Tailscale 経由でつなぎます。Desktop で開いているセッションを、そのまま続きから見たり指示したりできます。",
+                "Hermes が動いている Mac や Linux に Tailscale 経由でつなぎます。そこにいる Bot と、Desktop で話している続きからやりとりできます。サーバーは後からいくつでも足せます。",
                 color = HermesColors.Muted, fontSize = 15.sp, lineHeight = 25.sp,
             )
             OutlinedTextField(
                 value = url, onValueChange = { url = it },
                 label = { Text("サーバー URL") },
-                placeholder = { Text("https://[Mac のホスト名].ts.net") },
+                placeholder = { Text("https://[ホスト名].[tailnet].ts.net") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go,
@@ -76,6 +77,7 @@ fun ConnectScreen(state: AuthState.NeedsLogin, onLogin: (String) -> Unit) {
                 if (state.busy) CircularProgressIndicator(Modifier.size(20.dp), color = HermesColors.OnAccent, strokeWidth = 2.dp)
                 else Text("Tailscale でログイン", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
+            if (onCancel != null) TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("やめる", color = HermesColors.Muted) }
             state.error?.let { Text(it, color = HermesColors.Danger, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
             Text(

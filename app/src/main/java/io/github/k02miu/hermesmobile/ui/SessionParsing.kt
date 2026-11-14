@@ -99,3 +99,22 @@ internal fun parseProcesses(result: JsonObject, wakeCalls: Map<String, Pair<Bool
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 internal fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 internal fun JsonObject.choices(): List<String> = (this["choices"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+
+/** One provider of the model picker: only the ones signed in to, with the models that can actually be chosen. */
+data class ModelProvider(val slug: String, val name: String, val models: List<String>, val featured: List<String>)
+
+data class ModelOptions(val providers: List<ModelProvider>, val model: String, val provider: String)
+
+/** `model.options` → what the picker lists. Providers without credentials and models marked unavailable are left out. */
+fun parseModelOptions(result: JsonObject): ModelOptions {
+    fun JsonObject.strings(key: String) = (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+    val providers = (result["providers"] as? JsonArray).orEmpty().mapNotNull { row ->
+        val p = row as? JsonObject ?: return@mapNotNull null
+        if (p.bool("authenticated") != true) return@mapNotNull null
+        val unavailable = p.strings("unavailable_models").toSet()
+        val models = p.strings("models").filterNot { it in unavailable }
+        if (models.isEmpty()) return@mapNotNull null
+        ModelProvider(p.str("slug") ?: return@mapNotNull null, p.str("name") ?: "", models, p.strings("featured_models").filter { it in models })
+    }
+    return ModelOptions(providers, result.str("model") ?: "", result.str("provider") ?: "")
+}

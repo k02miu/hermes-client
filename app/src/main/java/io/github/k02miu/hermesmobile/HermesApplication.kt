@@ -11,7 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
-/** Holds the process-wide clients. The API and socket are rebuilt whenever the server URL changes. */
+/** Holds the process-wide clients: one API and one socket per server, sharing the HTTP client and cookie jar. */
 class HermesApplication : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val settings by lazy { Settings(this) }
@@ -26,15 +26,21 @@ class HermesApplication : Application() {
             .build()
     }
 
-    private var connection: Connection? = null
+    private val connections = mutableMapOf<String, Connection>()
 
     class Connection(val baseUrl: String, val api: HermesApi, val socket: GatewaySocket)
 
     @Synchronized
-    fun connection(baseUrl: String): Connection {
-        connection?.takeIf { it.baseUrl == baseUrl }?.let { return it }
-        connection?.socket?.close()
+    fun connection(baseUrl: String): Connection = connections.getOrPut(baseUrl) {
         val api = HermesApi(http, baseUrl)
-        return Connection(baseUrl, api, GatewaySocket(http, api, scope)).also { connection = it }
+        Connection(baseUrl, api, GatewaySocket(http, api, scope))
+    }
+
+    /** Drops a server: closes its socket and signs out of it. */
+    @Synchronized
+    fun forget(baseUrl: String) {
+        val connection = connections.remove(baseUrl) ?: return
+        connection.socket.close()
+        cookies.clear(connection.api.base)
     }
 }
