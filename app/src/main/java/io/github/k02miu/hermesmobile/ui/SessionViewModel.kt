@@ -122,9 +122,16 @@ data class SessionState(
     val reasoning: String = "",
     /** A model pick the gateway wants confirmed first (an expensive one), with its reason. */
     val modelConfirm: ModelConfirm? = null,
+    /**
+     * What a turn running in ANOTHER Hermes process is doing, when one is: on a Linux host a prompt sent from
+     * Hermes Desktop runs in Desktop's own backend, and the gateway this app listens to reports the session idle.
+     */
+    val elsewhere: String? = null,
 ) {
+    /** A turn is running, here or there. */
+    val busy get() = running || elsewhere != null
     /** Idle, but a process will wake Hermes when it ends (or prints what it watches for). */
-    val waiting get() = !running && processes.any { it.running && (it.notifyOnComplete || it.watchPatterns.isNotEmpty()) }
+    val waiting get() = !busy && processes.any { it.running && (it.notifyOnComplete || it.watchPatterns.isNotEmpty()) }
 }
 
 class SessionViewModel(
@@ -211,7 +218,7 @@ class SessionViewModel(
         val id = storedId ?: return
         runCatching { conn.api.messages(id, target.profile, limit = 60) }
             .onSuccess { resp ->
-                val history = historyItems(resp.messages, running = _state.value.running)
+                val history = historyItems(resp.messages, running = _state.value.busy)
                 wakeCalls = backgroundCalls(history)
                 _state.update { s ->
                     // Keep live rows that history has not caught up with yet (an answer still streaming), unless the
@@ -312,10 +319,29 @@ class SessionViewModel(
 
     /** Polls the session's background processes while the pane is on screen, as Desktop's status stack does. */
     suspend fun watchProcesses() {
+        var tick = 0
         while (true) {
-            loadProcesses()
-            delay(PROCESS_POLL_MS)
+            if (tick++ % 2 == 0) loadProcesses()
+            watchElsewhere()
+            delay(PROCESS_POLL_MS / 2)
         }
+    }
+
+    /**
+     * Follows a turn this socket hears nothing of (see [SessionState.elsewhere]): its activity label says it is
+     * running, and since none of its events arrive, the history is read again while it runs and once it ends.
+     */
+    private suspend fun watchElsewhere() {
+        val id = storedId ?: return
+        if (_state.value.running) {
+            _state.update { it.copy(elsewhere = null) } // the gateway's own turn: its events say everything
+            return
+        }
+        val activity = runCatching { conn.api.sessionActivity(id, target.profile) }.getOrNull() ?: return
+        val doing = activity.running(now = System.currentTimeMillis() / 1000.0)
+        val was = _state.value.elsewhere
+        _state.update { if (it.running) it else it.copy(elsewhere = doing) }
+        if (doing != null || was != null) loadHistory()
     }
 
     /** Background `terminal` calls seen in history: command → (notify when done, output patterns that wake Hermes). */

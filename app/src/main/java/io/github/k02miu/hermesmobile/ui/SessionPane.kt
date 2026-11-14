@@ -138,7 +138,7 @@ fun SessionPane(
         state.error?.let { Text(it, color = HermesColors.Danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
         ProcessStrip(state.processes, onOpen = { showProcesses = true })
         Composer(
-            running = state.running, model = state.model, onPickModel = { showModels = true },
+            running = state.running, elsewhere = state.elsewhere, model = state.model, onPickModel = { showModels = true },
             reasoning = state.reasoning, onReasoning = vm::setReasoning, onSend = vm::send, onStop = vm::interrupt,
         )
     }
@@ -191,8 +191,8 @@ private fun Header(
         }
         // Where there is no room for the word, a dot of the same colour says it.
         if (compact) {
-            if (state.running || state.waiting) Box(Modifier.size(10.dp).background(if (state.running) HermesColors.Working else HermesColors.Accent, RoundedCornerShape(5.dp)))
-        } else if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
+            if (state.busy || state.waiting) Box(Modifier.size(10.dp).background(if (state.busy) HermesColors.Working else HermesColors.Accent, RoundedCornerShape(5.dp)))
+        } else if (state.busy) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
         else if (state.waiting) Badge("待機中", HermesColors.AccentSurface, HermesColors.Accent)
         Spacer(Modifier.size(if (compact) 2.dp else 8.dp))
         actions()
@@ -547,7 +547,7 @@ private fun describeAnswer(raw: String): String =
 
 @Composable
 private fun Composer(
-    running: Boolean, model: String, onPickModel: () -> Unit, reasoning: String, onReasoning: (String?) -> Unit,
+    running: Boolean, elsewhere: String?, model: String, onPickModel: () -> Unit, reasoning: String, onReasoning: (String?) -> Unit,
     onSend: (String) -> Unit, onStop: () -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
@@ -560,6 +560,11 @@ private fun Composer(
     ) {
         if (running) {
             Text("Hermes が作業中です。送った指示は順番に処理されます", fontSize = 12.sp, color = HermesColors.Muted,
+                modifier = Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 4.dp, bottom = 8.dp))
+        } else if (elsewhere != null) {
+            // No stop button for this one: the gateway cannot reach a turn another Hermes process is running.
+            Text("Desktop から始めた作業が進行中です（$elsewhere）。返答は数秒おきに読み込みます。止めるのは Desktop で行ってください",
+                fontSize = 12.sp, lineHeight = 18.sp, color = HermesColors.Muted,
                 modifier = Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 4.dp, bottom = 8.dp))
         }
         // Which model answers, one tap from changing it: with a bot per client the right model differs per bot.

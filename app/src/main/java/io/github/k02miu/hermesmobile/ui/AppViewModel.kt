@@ -266,7 +266,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         .jsonObject["sessions"]?.let { it as? kotlinx.serialization.json.JsonArray }?.firstOrNull() as? JsonObject ?: return@runCatching null
                     val id = found.str("resolved_id") ?: found.str("id") ?: return@runCatching null
                     val last = chatPreview(conn.api.messages(id, bot.ref.profile, limit = 12).messages)
-                    BotChatSummary.of(last?.first.orEmpty(), last?.second ?: 0.0, now = System.currentTimeMillis() / 1000.0)
+                    val now = System.currentTimeMillis() / 1000.0
+                    // A turn in progress says so in the session itself, whichever Hermes process is running it.
+                    val busy = runCatching { conn.api.sessionActivity(id, bot.ref.profile).running(now) }.getOrNull() != null
+                    BotChatSummary.of(last?.first.orEmpty(), last?.second ?: 0.0, now).let { if (busy) it.copy(running = true) else it }
                 }.onSuccess { chat -> updateBot(bot.ref) { it.copy(chat = chat) } }
             }
             async {
