@@ -68,6 +68,11 @@ import io.github.k02miu.hermesmobile.ui.theme.HermesColors
 import kotlinx.coroutines.launch
 import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.vector.ImageVector
 
 @Composable
 fun HermesApp(vm: AppViewModel = viewModel()) {
@@ -150,8 +155,35 @@ private fun MainScreen(vm: AppViewModel, state: AppState) {
     )
 }
 
-/** A pane narrower than this is not worth splitting for: two fit an unfolded Fold held upright (~750dp), three a tablet. */
-private const val MIN_COLUMN_WIDTH = 360
+/** The narrowest a pane may get: three fit an unfolded Fold held upright (~750dp), one its cover screen. */
+private const val MIN_COLUMN_WIDTH = 250
+
+/** Below this a pane has no room for a row of buttons next to the bot's name; they fold into one menu. */
+private const val ROOMY_PANE_WIDTH = 340
+
+/** One thing a pane's header offers, drawn as a button where there is room and as a menu row where there is not. */
+private class PaneAction(val label: String, val icon: ImageVector, val highlight: Boolean = false, val onClick: () -> Unit)
+
+@Composable
+private fun PaneActions(actions: List<PaneAction>, compact: Boolean) {
+    if (!compact || actions.size <= 1) {
+        actions.forEach { a -> IconButton(onClick = a.onClick) { Icon(a.icon, a.label, tint = if (a.highlight) HermesColors.Working else HermesColors.Muted) } }
+        return
+    }
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "この列の操作", tint = HermesColors.Muted) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = HermesColors.SurfaceHigh) {
+            actions.forEach { a ->
+                DropdownMenuItem(
+                    text = { Text(a.label) },
+                    leadingIcon = { Icon(a.icon, null, tint = if (a.highlight) HermesColors.Working else HermesColors.Muted) },
+                    onClick = { open = false; a.onClick() },
+                )
+            }
+        }
+    }
+}
 
 private val columnsSaver = listSaver<SnapshotStateList<PaneKey?>, PaneKey?>(
     save = { it.toList() },
@@ -285,20 +317,16 @@ private fun columnsScreen(
                 val leading: (@Composable () -> Unit)? = if (index == 0 && !showList) ({
                     IconButton(onClick = { showList = true }) { Icon(Icons.Default.Menu, "一覧を開く", tint = HermesColors.Muted) }
                 }) else null
-                val actions: @Composable RowScope.() -> Unit = {
-                    if (columns.size < maxColumns) IconButton(onClick = { columns.add(index + 1, null); onFocus(index + 1) }) {
-                        Icon(Icons.Default.VerticalSplit, "列を増やす", tint = HermesColors.Muted)
-                    }
-                    if (columns.size > 1) IconButton(onClick = { columns.removeAt(index); onFocus((index - 1).coerceAtLeast(0)) }) {
-                        Icon(Icons.Default.Close, "この列を閉じる", tint = HermesColors.Muted)
-                    }
-                }
+                val actions = listOfNotNull(
+                    PaneAction("列を増やす", Icons.Default.VerticalSplit) { columns.add(index + 1, null); onFocus(index + 1) }.takeIf { columns.size < maxColumns },
+                    PaneAction("この列を閉じる", Icons.Default.Close) { columns.removeAt(index); onFocus((index - 1).coerceAtLeast(0)) }.takeIf { columns.size > 1 },
+                )
                 if (key != null) PaneColumn(vm, state, key, sheets, { if (it.screen) openBeside(index, it) else open(index, it) }, onBack = null, leading = leading, actions = actions)
                 else Column(Modifier.fillMaxSize().background(if (showList && listFits) HermesColors.Ground else HermesColors.Rail)) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         leading?.invoke()
                         Spacer(Modifier.weight(1f))
-                        actions()
+                        PaneActions(actions, compact = false)
                     }
                     // With the side list folded away, an empty column offers the list in its place.
                     if (showList && listFits) Placeholder(if (index == focused) "一覧から Bot を選んでください" else "この列を押してから、一覧で Bot を選んでください")
@@ -326,29 +354,27 @@ private fun columnsScreen(
 @Composable
 private fun PaneColumn(
     vm: AppViewModel, state: AppState, key: PaneKey, sheets: Sheets, open: (PaneKey) -> Unit, onBack: (() -> Unit)?,
-    leading: (@Composable () -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {},
-) {
+    leading: (@Composable () -> Unit)? = null, actions: List<PaneAction> = emptyList(),
+) = BoxWithConstraints {
     val avatars by vm.avatars.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as HermesApplication
     val bot = state.bot(key.bot)
     val label = bot?.label ?: key.bot.profile
+    // In a narrow pane the name matters more than the face or a row of buttons.
+    val compact = maxWidth < ROOMY_PANE_WIDTH.dp
     val avatar = avatars[key.bot.key]
     if (key.screen) {
         val screenVm: ScreenViewModel = viewModel(key = key.id) { ScreenViewModel(app, key.bot) }
-        ScreenPane(screenVm, label, avatar, onBack = onBack, leading = leading, actions = {
-            IconButton(onClick = { open(chatKey(key.bot)) }) { Icon(Icons.Default.Forum, "この Bot と話す", tint = HermesColors.Muted) }
-            actions()
-        })
-        return
+        val all = listOf(PaneAction("この Bot と話す", Icons.Default.Forum) { open(chatKey(key.bot)) }) + actions
+        ScreenPane(screenVm, label, avatar, onBack = onBack, leading = leading, actions = { PaneActions(all, compact) })
+        return@BoxWithConstraints
     }
     val sessionVm: SessionViewModel = viewModel(key = key.id) { SessionViewModel(app, key.bot.server, key.target()) }
-    SessionPane(sessionVm, label, avatar, onBack = onBack, leading = leading, actions = {
-        IconButton(onClick = { sheets.sessionsFor = key.bot }) { Icon(Icons.Default.Forum, "この Bot の会話", tint = HermesColors.Muted) }
-        if (bot?.screen != null) IconButton(onClick = { open(PaneKey(key.bot, screen = true)) }) {
-            Icon(Icons.Default.DesktopWindows, "Bot Desktop", tint = if (bot.screen.running) HermesColors.Working else HermesColors.Muted)
-        }
-        actions()
-    })
+    val all = listOfNotNull(
+        PaneAction("この Bot の会話", Icons.Default.Forum) { sheets.sessionsFor = key.bot },
+        bot?.screen?.let { screen -> PaneAction("Bot Desktop", Icons.Default.DesktopWindows, highlight = screen.running) { open(PaneKey(key.bot, screen = true)) } },
+    ) + actions
+    SessionPane(sessionVm, label, avatar, onBack = onBack, leading = leading, actions = { PaneActions(all, compact) }, compact = compact)
 }
 
 @Composable
