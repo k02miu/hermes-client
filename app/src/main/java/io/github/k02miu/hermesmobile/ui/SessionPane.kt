@@ -248,7 +248,7 @@ private fun Transcript(
                 when (row) {
                     is TranscriptRow.Tools -> ToolGroup(row, onOpenTool)
                     is TranscriptRow.Single -> when (val item = row.item) {
-                        is ChatItem.User -> UserBubble(item)
+                        is ChatItem.User -> if (item.injected) InjectedNotice(item) else UserBubble(item)
                         is ChatItem.Assistant -> AssistantText(item, onOpenMedia)
                         is ChatItem.Tool -> ToolRow(item, onOpenTool)
                         is ChatItem.Notice -> Text(item.text, fontSize = 12.sp, color = HermesColors.Danger)
@@ -366,6 +366,27 @@ private fun ModelSheet(current: Pair<String, String>, load: suspend () -> ModelO
 
 /** The widest the conversation column gets on a tablet, so lines stay short enough to read. */
 private val READING_WIDTH = 860.dp
+
+/**
+ * Hermes waking itself up (a background process ended or printed what it watched for). Not something the user
+ * said, and usually a screenful of command line, so it is one muted line until tapped.
+ */
+@Composable
+private fun InjectedNotice(item: ChatItem.User) {
+    var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        Modifier.fillMaxWidth().clip(shape).border(1.dp, HermesColors.Line, shape)
+            .clickable(onClickLabel = if (expanded) "たたむ" else "全文を見る") { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text("バックグラウンド処理からの知らせ", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = HermesColors.Muted)
+        Text(
+            item.text.removePrefix("[").trim(), fontSize = 12.sp, lineHeight = 18.sp, color = HermesColors.TextSoft, fontFamily = MonoFamily,
+            maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
 
 @Composable
 private fun UserBubble(item: ChatItem.User) {

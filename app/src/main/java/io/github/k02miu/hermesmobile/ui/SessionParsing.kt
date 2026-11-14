@@ -32,7 +32,7 @@ private fun toItems(m: StoredMessage, results: Map<String, JsonElement?>, runnin
     if (m.displayKind == "hidden") return emptyList()
     val key = "m-${m.id}"
     return when (m.role) {
-        "user" -> listOfNotNull(textOf(m)?.let { ChatItem.User(key, it, injected = m.displayKind != null) })
+        "user" -> listOfNotNull(textOf(m)?.let { ChatItem.User(key, it, injected = isInjectedNotice(m.displayKind, it)) })
         "assistant" -> buildList {
             textOf(m)?.let { add(ChatItem.Assistant(key, it)) }
             (m.toolCalls as? JsonArray)?.forEachIndexed { i, call ->
@@ -95,6 +95,33 @@ internal fun parseProcesses(result: JsonObject, wakeCalls: Map<String, Pair<Bool
             exitCode = o["exit_code"]?.jsonPrimitive?.intOrNull,
         )
     }.orEmpty().sortedWith(compareByDescending<BackgroundProcess> { it.running }.thenByDescending { it.startedAt ?: 0.0 })
+
+/**
+ * The processes of [sessionIds] in a profile's `processes.json`: every background process still alive on the
+ * host, whichever Hermes process started it. All of them count as running (the file drops a process when it ends).
+ */
+internal fun parseProcessFile(text: String, sessionIds: Set<String>): List<BackgroundProcess> {
+    val rows = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(text) as? JsonArray }.getOrNull() ?: return emptyList()
+    return rows.mapNotNull { row ->
+        val o = row as? JsonObject ?: return@mapNotNull null
+        if (o.str("session_key") !in sessionIds && o.str("parent_session_id") !in sessionIds) return@mapNotNull null
+        BackgroundProcess(
+            id = o.str("session_id") ?: return@mapNotNull null,
+            command = o.str("command").orEmpty(), status = "running",
+            startedAt = o["started_at"]?.jsonPrimitive?.doubleOrNull,
+            notifyOnComplete = o.bool("notify_on_complete") == true,
+            watchPatterns = (o["watch_patterns"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+            output = "", elsewhere = true,
+        )
+    }.sortedByDescending { it.startedAt ?: 0.0 }
+}
+
+/**
+ * Whether a "user" message was really written by Hermes: the wake-up it sends itself when a background process
+ * ends or prints what it watches for. Newer gateways mark these (`display_kind`); older rows only by their text.
+ */
+internal fun isInjectedNotice(displayKind: String?, text: String): Boolean =
+    displayKind != null || text.startsWith("[IMPORTANT: Background process ") || text.startsWith("[SYSTEM: Background process ")
 
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 internal fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
