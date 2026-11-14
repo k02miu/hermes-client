@@ -17,6 +17,7 @@ data class Profile(
     val model: String = "",
     @SerialName("display_name") val displayName: String = "",
     @SerialName("bot_title") val botTitle: String = "",
+    val description: String = "",
 ) {
     val label: String get() = botTitle.ifBlank { displayName.ifBlank { name } }
 }

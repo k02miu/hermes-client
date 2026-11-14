@@ -42,10 +42,10 @@ class MainActivity : ComponentActivity() {
         handleConnectLink(intent)
     }
 
-    /** `hermesmobile://connect?url=https://<host>.ts.net` fills in the server and signs in. */
+    /** `hermesmobile://connect?url=https://<host>.ts.net` adds that server and signs in. */
     private fun handleConnectLink(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme != "hermesmobile" || data.host != "connect") return
-        data.getQueryParameter("url")?.let(appViewModel::login)
+        data.getQueryParameter("url")?.let(appViewModel::addServer)
     }
 }

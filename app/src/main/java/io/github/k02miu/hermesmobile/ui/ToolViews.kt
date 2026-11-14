@@ -57,6 +57,15 @@ sealed interface TranscriptRow {
     data class Tools(val tools: List<ChatItem.Tool>) : TranscriptRow { override val key get() = "tools-" + tools.first().key }
 }
 
+/**
+ * Which prompt heads the turn that row [firstRow] belongs to: the nearest user message at or before it.
+ * Null before the first prompt (a conversation that opens with the bot speaking) or for an index out of range.
+ */
+fun pinnedPromptIndex(rows: List<TranscriptRow>, firstRow: Int): Int? {
+    if (firstRow !in rows.indices) return null
+    return (firstRow downTo 0).firstOrNull { (rows[it] as? TranscriptRow.Single)?.item is ChatItem.User }
+}
+
 fun groupTools(items: List<ChatItem>): List<TranscriptRow> {
     val rows = mutableListOf<TranscriptRow>()
     var run = mutableListOf<ChatItem.Tool>()

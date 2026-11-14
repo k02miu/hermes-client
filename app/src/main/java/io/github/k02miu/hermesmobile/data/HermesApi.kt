@@ -92,8 +92,16 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
     }
 
     fun webSocketUrl(ticket: String): String =
-        base.newBuilder().addPathSegments("api/ws").addQueryParameter("ticket", ticket).build()
-            .toString().replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        base.newBuilder().addPathSegments("api/ws").addQueryParameter("ticket", ticket).build().toWebSocket()
+
+    /** The Bot Desktop's RFB bridge: [path] and the single-use [ticket] both come from `display.observe`. */
+    fun displaySocketUrl(path: String, ticket: String): String =
+        base.newBuilder().addPathSegments(path.trimStart('/')).addQueryParameter("display_ticket", ticket).build().toWebSocket()
+
+    /** The origin the gateway's cross-site guard expects on every request, WebSockets included. */
+    val origin: String get() = base.toString().trimEnd('/')
+
+    private fun HttpUrl.toWebSocket() = toString().replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
 
     private suspend inline fun <reified T> get(path: String, crossinline query: HttpUrl.Builder.() -> Unit = {}): T {
         val url = base.newBuilder().addPathSegments(path).apply { query() }.build()
@@ -101,7 +109,7 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
     }
 
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
-        client.newCall(request.newBuilder().header("Origin", base.toString().trimEnd('/')).build()).execute().use { resp ->
+        client.newCall(request.newBuilder().header("Origin", origin).build()).execute().use { resp ->
             val body = resp.body.string()
             if (!resp.isSuccessful) throw HermesHttpException(resp.code, "HTTP ${resp.code} ${request.url.encodedPath}")
             body
