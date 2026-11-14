@@ -63,7 +63,8 @@ sealed interface TranscriptRow {
  */
 fun pinnedPromptIndex(rows: List<TranscriptRow>, firstRow: Int): Int? {
     if (firstRow !in rows.indices) return null
-    return (firstRow downTo 0).firstOrNull { (rows[it] as? TranscriptRow.Single)?.item is ChatItem.User }
+    // What Hermes injected (a background process ending) is not something the reader asked.
+    return (firstRow downTo 0).firstOrNull { ((rows[it] as? TranscriptRow.Single)?.item as? ChatItem.User)?.injected == false }
 }
 
 fun groupTools(items: List<ChatItem>): List<TranscriptRow> {

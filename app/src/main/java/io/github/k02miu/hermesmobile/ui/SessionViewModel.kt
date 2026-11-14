@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.k02miu.hermesmobile.HermesApplication
 import io.github.k02miu.hermesmobile.data.GatewayEvent
+import io.github.k02miu.hermesmobile.data.MutationSnapshot
 import io.github.k02miu.hermesmobile.data.RpcException
 import io.github.k02miu.hermesmobile.data.ServerRequest
 import io.github.k02miu.hermesmobile.data.StoredMessage
@@ -48,7 +49,8 @@ data class SessionTarget(val profile: String, val sessionId: String?, val title:
 sealed interface ChatItem {
     val key: String
 
-    data class User(override val key: String, val text: String, val pending: Boolean = false) : ChatItem
+    /** [injected]: put into the conversation by Hermes itself (a background process ending), not typed by anyone. */
+    data class User(override val key: String, val text: String, val pending: Boolean = false, val injected: Boolean = false) : ChatItem
     data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
     /** [args] is the call's arguments as JSON; [output] the readable result, once it has finished. */
     data class Tool(
@@ -97,7 +99,8 @@ data class BackgroundProcess(
     val running get() = status == "running"
 }
 
-data class ModelConfirm(val provider: String, val model: String, val message: String)
+/** [token] is the gateway's own token for this exact pick; only sending it back applies the switch. */
+data class ModelConfirm(val provider: String, val model: String, val message: String, val token: String)
 
 data class SessionState(
     val title: String,
@@ -233,28 +236,36 @@ class SessionViewModel(
     }
 
     /**
-     * Switches this conversation's model, as Desktop's picker does: `--session` keeps the bot's default as it is.
-     * While a turn runs the gateway holds the pick for the next one. An expensive model comes back as a
-     * question first ([SessionState.modelConfirm]); answering it calls this again with [confirmed].
+     * Switches this conversation's model; the bot's default stays as it is. On the gateway a model pick is a
+     * `session.mutate` (fenced by revision and generation, safe to retry), not a config write. An expensive
+     * model comes back as a question first ([SessionState.modelConfirm]) with a token; answering it calls this
+     * again with that token as [confirm].
      */
-    fun setModel(provider: String, model: String, confirmed: Boolean = false) {
+    fun setModel(provider: String, model: String, confirm: String? = null) {
         val id = liveId ?: return
         _state.update { it.copy(modelConfirm = null) }
+        val requestId = "android-" + UUID.randomUUID()
         viewModelScope.launch {
             runCatching {
-                conn.socket.request("config.set", buildJsonObject {
-                    put("profile", target.profile); put("session_id", id); put("key", "model")
-                    put("value", "$model --provider $provider --session"); put("confirm_expensive_model", confirmed)
-                }).jsonObject
+                fenced { fences ->
+                    conn.socket.request("session.mutate", buildJsonObject {
+                        put("profile", target.profile); put("session_id", id); put("request_id", requestId)
+                        put("expected_revision", fences.runtimeRevision); put("expected_generation", fences.runtimeGeneration)
+                        put("operation", "model")
+                        put("payload", buildJsonObject { put("model", model); put("provider", provider); confirm?.let { put("confirm", it) } })
+                    }).jsonObject
+                }
             }.onSuccess { res ->
                 if (res.bool("confirm_required") == true) {
-                    _state.update { it.copy(modelConfirm = ModelConfirm(provider, model, res.str("confirm_message") ?: res.str("warning") ?: "")) }
+                    val token = res.str("confirm") ?: return@onSuccess notice("モデルを変えられませんでした（確認の手続きに失敗しました）")
+                    _state.update { it.copy(modelConfirm = ModelConfirm(provider, model, res.str("confirm_message").orEmpty(), token)) }
                     return@onSuccess
                 }
-                _state.update { it.copy(model = res.str("value")?.takeIf { v -> v.isNotBlank() } ?: model, provider = provider) }
-                res.str("warning")?.takeIf { it.isNotBlank() }?.let(::notice)
-                if (res.bool("deferred") == true) notice("モデルは次の返答から $model に切り替わります")
-            }.onFailure { e -> notice("モデルを変えられませんでした（${e.message}）") }
+                _state.update { it.copy(model = res.str("model")?.takeIf { v -> v.isNotBlank() } ?: model, provider = res.str("provider") ?: provider) }
+            }.onFailure { e ->
+                val busy = e.message.orEmpty().let { it.contains("busy") || it.contains("lease") }
+                notice(if (busy) "作業中はモデルを変えられません。止まってから選び直してください" else "モデルを変えられませんでした（${e.message}）")
+            }
         }
     }
 
@@ -292,12 +303,30 @@ class SessionViewModel(
         }
     }
 
+    /**
+     * Stops the running turn. The gateway only stops the turn it is told about, by generation, so a stop that
+     * raced the turn ending cannot hit the next one; the generation is read fresh, and once more if it moved.
+     */
     fun interrupt() {
         val id = liveId ?: return
         viewModelScope.launch {
-            runCatching {
-                conn.socket.request("session.interrupt", buildJsonObject { put("profile", target.profile); put("session_id", id) })
-            }.onFailure { e -> notice("止められませんでした（${e.message}）") }
+            runCatching { fenced { fences -> stop(id, fences.runtimeGeneration) } }
+                .onFailure { e -> notice("止められませんでした（${e.message}）") }
+        }
+    }
+
+    private suspend fun stop(sessionId: String, generation: Long) = conn.socket.request("session.interrupt", buildJsonObject {
+        put("profile", target.profile); put("session_id", sessionId); put("execution_generation", generation)
+    })
+
+    /** Runs [action] against the session's current fences, and once again with fresh ones when they had just moved. */
+    private suspend fun <T> fenced(action: suspend (MutationSnapshot) -> T): T {
+        val id = storedId ?: liveId ?: throw IllegalStateException("会話を開いている途中です")
+        return try {
+            action(conn.api.mutationSnapshot(id, target.profile))
+        } catch (e: RpcException) {
+            if (e.message != "stale_generation" && e.message != "revision_conflict") throw e
+            action(conn.api.mutationSnapshot(id, target.profile))
         }
     }
 

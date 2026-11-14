@@ -32,7 +32,7 @@ private fun toItems(m: StoredMessage, results: Map<String, JsonElement?>, runnin
     if (m.displayKind == "hidden") return emptyList()
     val key = "m-${m.id}"
     return when (m.role) {
-        "user" -> listOfNotNull(textOf(m)?.let { ChatItem.User(key, it) })
+        "user" -> listOfNotNull(textOf(m)?.let { ChatItem.User(key, it, injected = m.displayKind != null) })
         "assistant" -> buildList {
             textOf(m)?.let { add(ChatItem.Assistant(key, it)) }
             (m.toolCalls as? JsonArray)?.forEachIndexed { i, call ->

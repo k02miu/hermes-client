@@ -67,7 +67,7 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
     }
 
     private suspend fun patchPinned(sessionId: String, profile: String, pinned: Boolean) {
-        val snapshot = get<MutationSnapshot>("api/sessions/$sessionId/mutation-snapshot") { addQueryParameter("profile", profile) }
+        val snapshot = mutationSnapshot(sessionId, profile)
         val body = buildJsonObject {
             put("pinned", pinned); put("profile", profile)
             put("request_id", "android-" + UUID.randomUUID()); put("expected_revision", snapshot.runtimeRevision)
@@ -75,6 +75,13 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
         val url = base.newBuilder().addPathSegments("api/sessions/$sessionId").build()
         execute(Request.Builder().url(url).patch(body.toRequestBody("application/json".toMediaType())).build())
     }
+
+    /**
+     * The session's current fences. Edits and controls on a session the gateway owns are refused unless they name
+     * the revision (and, for a running turn, the generation) they were made against.
+     */
+    suspend fun mutationSnapshot(sessionId: String, profile: String): MutationSnapshot =
+        get("api/sessions/$sessionId/mutation-snapshot") { addQueryParameter("profile", profile) }
 
     /** A file on the gateway's disk (a `MEDIA:` delivery), with the same guards Desktop's file browser gets. */
     suspend fun readFile(path: String, profile: String): GatewayFile {
