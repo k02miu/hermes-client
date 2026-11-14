@@ -95,6 +95,11 @@ sealed interface PendingPrompt {
 data class BackgroundProcess(
     val id: String, val command: String, val status: String, val startedAt: Double?,
     val notifyOnComplete: Boolean, val watchPatterns: List<String>, val output: String, val exitCode: Int? = null,
+    /**
+     * Started by another Hermes process on the same host (the one Hermes Desktop runs over SSH): the gateway this
+     * app talks to cannot show its output or stop it, only know from the profile's process file that it is there.
+     */
+    val elsewhere: Boolean = false,
 ) {
     val running get() = status == "running"
 }
@@ -136,6 +141,8 @@ class SessionViewModel(
     private var liveId: String? = null
     private var storedId: String? = target.sessionId
     private var subscriptionId: String? = null
+    /** The bot's home directory on the server, where its process file lives. */
+    private var profileHome: String? = null
 
     // Declared before init: its launches run immediately on the main dispatcher and reach open() at once.
     private val opening = Mutex()
@@ -171,6 +178,7 @@ class SessionViewModel(
                 return
             }
             val info = snap["info"] as? JsonObject
+            profileHome = info?.str("profile_id") ?: profileHome
             val title = info?.str("title")?.takeIf { it.isNotBlank() } ?: target.title
             val prompts = (snap["prompts"] as? JsonArray)?.mapNotNull { parsePrompt(it.jsonObject) }.orEmpty()
             _state.update {
@@ -318,8 +326,13 @@ class SessionViewModel(
         val res = runCatching {
             conn.socket.request("process.list", buildJsonObject { put("profile", target.profile); put("session_id", id) }).jsonObject
         }.onFailure { Log.w(TAG, "process.list failed", it) }.getOrNull() ?: return
-        val processes = parseProcesses(res, wakeCalls, now = System.currentTimeMillis() / 1000.0)
-        _state.update { it.copy(processes = processes) }
+        val known = parseProcesses(res, wakeCalls, now = System.currentTimeMillis() / 1000.0)
+        // A turn sent from Desktop runs in Desktop's own Hermes, and so do the processes it starts; the gateway's
+        // list has only its own. The profile's process file lists them all, so the rest are read from there.
+        val elsewhere = profileHome?.let { home ->
+            runCatching { conn.api.readFile("$home/processes.json", target.profile).bytes.decodeToString() }.getOrNull()
+        }?.let { parseProcessFile(it, sessionIds = setOfNotNull(id, storedId)) }.orEmpty().filterNot { p -> known.any { it.id == p.id } }
+        _state.update { it.copy(processes = elsewhere + known) }
     }
 
     fun killProcess(processId: String) {

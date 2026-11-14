@@ -259,10 +259,11 @@ fun ProcessSheet(processes: List<BackgroundProcess>, onKill: (BackgroundProcess)
                         Spacer(Modifier.size(8.dp))
                         p.startedAt?.let { Elapsed(it) }
                         Spacer(Modifier.weight(1f))
-                        OutlinedButton(onClick = { confirm = p }, modifier = Modifier.heightIn(min = 36.dp)) {
+                        if (!p.elsewhere) OutlinedButton(onClick = { confirm = p }, modifier = Modifier.heightIn(min = 36.dp)) {
                             Text("止める", color = HermesColors.Danger, fontSize = 13.sp)
                         }
                     }
+                    if (p.elsewhere) Text("Desktop から始めた処理です。出力を見たり止めたりは Desktop で行ってください。", fontSize = 12.sp, lineHeight = 18.sp, color = HermesColors.Muted)
                     val wakes = buildList {
                         if (p.notifyOnComplete) add("終わったら Hermes に知らせる")
                         if (p.watchPatterns.isNotEmpty()) add("「" + p.watchPatterns.joinToString("」「") + "」が出たら知らせる")

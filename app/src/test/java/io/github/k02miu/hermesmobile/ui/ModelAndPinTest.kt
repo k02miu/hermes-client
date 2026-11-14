@@ -53,4 +53,29 @@ class ModelAndPinTest {
         assertEquals(ModelOptions(emptyList(), "", ""), parseModelOptions(Json.parseToJsonElement("{}").jsonObject))
         assertEquals(emptyList<ModelProvider>(), parseModelOptions(Json.parseToJsonElement("""{"providers":[1,{"authenticated":true,"models":["x"]}]}""").jsonObject).providers)
     }
+
+    @Test
+    fun processesStartedByAnotherHermesAreReadFromTheProfilesFile() {
+        val file = """[
+          {"session_id":"proc_a","command":"codex review","started_at":100.5,"session_key":"local-1","notify_on_complete":true,"watch_patterns":[]},
+          {"session_id":"proc_b","command":"watch.sh","started_at":200.0,"parent_session_id":"local-1","watch_patterns":["[ALERT]"]},
+          {"session_id":"proc_c","command":"other bot","session_key":"local-2"},
+          {"command":"no id","session_key":"local-1"}
+        ]"""
+        val found = parseProcessFile(file, sessionIds = setOf("local-1"))
+        assertEquals(listOf("proc_b", "proc_a"), found.map { it.id }) // newest first, other sessions left out
+        assertEquals(true, found.all { it.running && it.elsewhere })
+        assertEquals(listOf("[ALERT]"), found[0].watchPatterns)
+        assertEquals(true, found[1].notifyOnComplete)
+        assertEquals(emptyList<BackgroundProcess>(), parseProcessFile("not json", setOf("local-1")))
+        assertEquals(emptyList<BackgroundProcess>(), parseProcessFile("{}", setOf("local-1")))
+    }
+
+    @Test
+    fun aWakeUpHermesSendsItselfIsRecognisedWithOrWithoutItsMark() {
+        assertEquals(true, isInjectedNotice("process_complete", "anything"))
+        assertEquals(true, isInjectedNotice(null, "[IMPORTANT: Background process proc_a668 matched watch pattern \"[ALERT]\"."))
+        assertEquals(false, isInjectedNotice(null, "IMPORTANT: これを直して"))
+        assertEquals(false, isInjectedNotice(null, "何やってたっけ？"))
+    }
 }
