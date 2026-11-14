@@ -19,6 +19,15 @@ class ModelAndPinTest {
     }
 
     @Test
+    fun whatHermesInjectedIsNeverPinned() {
+        val notice = TranscriptRow.Single(ChatItem.User("n", "[IMPORTANT: Background process ended]", injected = true))
+        val rows = listOf(user("u1"), answer("a1"), notice, answer("a2"))
+        assertEquals(0, pinnedPromptIndex(rows, firstRow = 3)) // the answer after the notice still belongs to u1
+        assertEquals(0, pinnedPromptIndex(rows, firstRow = 2))
+        assertNull(pinnedPromptIndex(listOf(notice, answer("a")), firstRow = 1))
+    }
+
+    @Test
     fun nothingIsPinnedBeforeTheFirstPromptOrOutsideTheList() {
         val rows = listOf(answer("greeting"), user("u1"))
         assertNull(pinnedPromptIndex(rows, firstRow = 0))

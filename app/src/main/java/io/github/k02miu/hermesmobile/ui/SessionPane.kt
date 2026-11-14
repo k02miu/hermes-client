@@ -148,7 +148,7 @@ fun SessionPane(
             onDismissRequest = vm::dismissModelConfirm,
             title = { Text("${ask.model} に切り替えますか") },
             text = { Text(ask.message.ifBlank { "このモデルは料金が高めです。" }) },
-            confirmButton = { TextButton(onClick = { vm.setModel(ask.provider, ask.model, confirmed = true) }) { Text("切り替える", color = HermesColors.Accent) } },
+            confirmButton = { TextButton(onClick = { vm.setModel(ask.provider, ask.model, confirm = ask.token) }) { Text("切り替える", color = HermesColors.Accent) } },
             dismissButton = { TextButton(onClick = vm::dismissModelConfirm) { Text("やめる") } },
         )
     }

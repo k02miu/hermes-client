@@ -69,7 +69,11 @@ data class SessionSlice(val sessions: List<SessionSummary> = emptyList())
 data class SidebarResponse(val recents: SessionSlice = SessionSlice())
 
 @Serializable
-data class MutationSnapshot(@SerialName("runtime_revision") val runtimeRevision: Long = 0)
+data class MutationSnapshot(
+    @SerialName("runtime_revision") val runtimeRevision: Long = 0,
+    /** The generation of the turn that is (or was last) running; stopping a turn has to name it. */
+    @SerialName("runtime_generation") val runtimeGeneration: Long = 0,
+)
 
 @Serializable
 data class WsTicket(val ticket: String, @SerialName("ttl_seconds") val ttlSeconds: Int = 30)
