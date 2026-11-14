@@ -113,6 +113,8 @@ data class SessionState(
     /** The model this conversation runs on, and the provider serving it. */
     val model: String = "",
     val provider: String = "",
+    /** How hard the model thinks before answering (`minimal` … `ultra`, or `none`); blank until known. */
+    val reasoning: String = "",
     /** A model pick the gateway wants confirmed first (an expensive one), with its reason. */
     val modelConfirm: ModelConfirm? = null,
 ) {
@@ -175,6 +177,7 @@ class SessionViewModel(
                 it.copy(
                     title = title, prompts = prompts, running = snap.bool("running") ?: false, error = null,
                     model = info?.str("model") ?: it.model, provider = info?.str("provider") ?: it.provider,
+                    reasoning = info?.str("reasoning_effort") ?: it.reasoning,
                 )
             }
             loadHistory()
@@ -265,6 +268,34 @@ class SessionViewModel(
             }.onFailure { e ->
                 val busy = e.message.orEmpty().let { it.contains("busy") || it.contains("lease") }
                 notice(if (busy) "作業中はモデルを変えられません。止まってから選び直してください" else "モデルを変えられませんでした（${e.message}）")
+            }
+        }
+    }
+
+    /**
+     * Sets this conversation's reasoning effort; null hands it back to the bot's own setting. The same fenced
+     * `session.mutate` as a model pick, and like it the bot's default is left alone.
+     */
+    fun setReasoning(effort: String?) {
+        val id = liveId ?: return
+        val requestId = "android-" + UUID.randomUUID()
+        viewModelScope.launch {
+            runCatching {
+                fenced { fences ->
+                    conn.socket.request("session.mutate", buildJsonObject {
+                        put("profile", target.profile); put("session_id", id); put("request_id", requestId)
+                        put("expected_revision", fences.runtimeRevision); put("expected_generation", fences.runtimeGeneration)
+                        put("operation", "reasoning")
+                        put("payload", buildJsonObject { put("effort", effort) })
+                    }).jsonObject
+                }
+            }.onSuccess { res ->
+                if (effort != null) _state.update { it.copy(reasoning = res.str("effort") ?: effort) }
+                // Back on the bot's setting: what that is comes with the session's info, so read it again.
+                else open()
+            }.onFailure { e ->
+                val busy = e.message.orEmpty().let { it.contains("busy") || it.contains("lease") }
+                notice(if (busy) "作業中は変えられません。止まってから選び直してください" else "思考の深さを変えられませんでした（${e.message}）")
             }
         }
     }
@@ -448,6 +479,7 @@ class SessionViewModel(
                     running = p.bool("running") ?: s.running, title = p.str("title")?.takeIf { it.isNotBlank() } ?: s.title,
                     model = p.str("model")?.takeIf { it.isNotBlank() } ?: s.model,
                     provider = p.str("provider")?.takeIf { it.isNotBlank() } ?: s.provider,
+                    reasoning = p.str("reasoning_effort")?.takeIf { it.isNotBlank() } ?: s.reasoning,
                 )
             }
             "session.title" -> p.str("title")?.let { t -> _state.update { it.copy(title = t) } }

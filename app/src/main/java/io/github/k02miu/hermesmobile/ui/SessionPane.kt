@@ -101,12 +101,17 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 
 @Composable
 fun SessionPane(
     vm: SessionViewModel, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?, modifier: Modifier = Modifier,
     leading: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    /** A narrow pane (three side by side on a Fold): the header drops the avatar and shortens its badge. */
+    compact: Boolean = false,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var preview by rememberSaveable { mutableStateOf<String?>(null) }
@@ -121,7 +126,7 @@ fun SessionPane(
     }
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(HermesColors.Ground).imePadding()) {
-        Header(state, profileLabel, avatar, onBack, leading, actions)
+        Header(state, profileLabel, avatar, onBack, leading, actions, compact)
         Box(Modifier.weight(1f)) {
             Transcript(state, onAnswer = vm::answer, onOpenMedia = { preview = it }, onOpenTool = { toolKey = it.key })
             if (state.loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = HermesColors.Working)
@@ -132,7 +137,10 @@ fun SessionPane(
         }
         state.error?.let { Text(it, color = HermesColors.Danger, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
         ProcessStrip(state.processes, onOpen = { showProcesses = true })
-        Composer(running = state.running, model = state.model, onPickModel = { showModels = true }, onSend = vm::send, onStop = vm::interrupt)
+        Composer(
+            running = state.running, model = state.model, onPickModel = { showModels = true },
+            reasoning = state.reasoning, onReasoning = vm::setReasoning, onSend = vm::send, onStop = vm::interrupt,
+        )
     }
     // Looked up by key so a call still running fills in as its result arrives.
     toolKey?.let { key ->
@@ -164,7 +172,7 @@ fun SessionPane(
 @Composable
 private fun Header(
     state: SessionState, profileLabel: String, avatar: ImageBitmap?, onBack: (() -> Unit)?,
-    leading: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit,
+    leading: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit, compact: Boolean,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(start = if (onBack != null || leading != null) 4.dp else 20.dp, end = 8.dp, top = 12.dp, bottom = 10.dp),
@@ -172,16 +180,21 @@ private fun Header(
     ) {
         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "戻る") }
         leading?.invoke()
-        BotAvatar(32, avatar)
-        Spacer(Modifier.size(10.dp))
+        if (!compact) {
+            BotAvatar(32, avatar)
+            Spacer(Modifier.size(10.dp))
+        }
         Column(Modifier.weight(1f)) {
             // The bot is who you are talking to; which of its conversations this is comes second.
             Text(profileLabel, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(state.title, fontSize = 11.sp, color = HermesColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
+        // Where there is no room for the word, a dot of the same colour says it.
+        if (compact) {
+            if (state.running || state.waiting) Box(Modifier.size(10.dp).background(if (state.running) HermesColors.Working else HermesColors.Accent, RoundedCornerShape(5.dp)))
+        } else if (state.running) Badge("作業中", HermesColors.WorkingSurface, HermesColors.Working)
         else if (state.waiting) Badge("待機中", HermesColors.AccentSurface, HermesColors.Accent)
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(if (compact) 2.dp else 8.dp))
         actions()
     }
     Box(Modifier.fillMaxWidth().heightIn(min = 1.dp).background(HermesColors.Line))
@@ -512,7 +525,10 @@ private fun describeAnswer(raw: String): String =
     runCatching { Json.parseToJsonElement(raw).jsonArray.joinToString("、") { it.jsonPrimitive.content } }.getOrNull() ?: raw
 
 @Composable
-private fun Composer(running: Boolean, model: String, onPickModel: () -> Unit, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun Composer(
+    running: Boolean, model: String, onPickModel: () -> Unit, reasoning: String, onReasoning: (String?) -> Unit,
+    onSend: (String) -> Unit, onStop: () -> Unit,
+) {
     var text by rememberSaveable { mutableStateOf("") }
     // The pane transition hands focus to the first focusable it finds, which would raise the
     // keyboard on every open. The field only accepts focus once the user has touched it.
@@ -528,12 +544,13 @@ private fun Composer(running: Boolean, model: String, onPickModel: () -> Unit, o
         // Which model answers, one tap from changing it: with a bot per client the right model differs per bot.
         if (model.isNotBlank()) Row(Modifier.widthIn(max = READING_WIDTH).fillMaxWidth().padding(start = 2.dp, bottom = 6.dp)) {
             Row(
-                Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "モデルを選ぶ", onClick = onPickModel).padding(horizontal = 6.dp, vertical = 4.dp),
+Modifier.weight(1f, fill = false).clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "モデルを選ぶ", onClick = onPickModel).padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(model, fontSize = 12.sp, color = HermesColors.TextSoft, fontFamily = MonoFamily, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Icon(Icons.Default.ArrowDropDown, null, tint = HermesColors.Muted, modifier = Modifier.size(18.dp))
             }
+            ReasoningPicker(reasoning, onReasoning)
         }
         Row(Modifier.widthIn(max = READING_WIDTH), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
@@ -558,6 +575,39 @@ private fun Composer(running: Boolean, model: String, onPickModel: () -> Unit, o
                     Icon(Icons.Default.ArrowUpward, "送信")
                 }
             }
+        }
+    }
+}
+
+/** Hermes's levels, lightest first; `none` switches thinking off where the model allows it. */
+private val REASONING_LEVELS = listOf(
+    "none" to "なし", "minimal" to "最小", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "かなり高", "max" to "最大", "ultra" to "ウルトラ",
+)
+
+/** How hard the model thinks, next to which model it is: the two are usually chosen together. */
+@Composable
+private fun ReasoningPicker(current: String, onPick: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClickLabel = "思考の深さを選ぶ") { open = true }.padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Blank: the bot has no level of its own set, so the model's default applies.
+            Text("思考 " + (REASONING_LEVELS.firstOrNull { it.first == current }?.second ?: current.ifBlank { "既定" }), fontSize = 12.sp, color = HermesColors.TextSoft, maxLines = 1)
+            Icon(Icons.Default.ArrowDropDown, null, tint = HermesColors.Muted, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = HermesColors.SurfaceHigh) {
+            REASONING_LEVELS.forEach { (level, label) ->
+                DropdownMenuItem(
+                    text = { Text("$label  ", fontSize = 14.sp) },
+                    leadingIcon = { Text(level, fontSize = 12.sp, color = HermesColors.Muted, fontFamily = MonoFamily) },
+                    trailingIcon = { if (level == current) Icon(Icons.Default.Check, "使用中", tint = HermesColors.Accent, modifier = Modifier.size(18.dp)) },
+                    onClick = { open = false; if (level != current) onPick(level) },
+                )
+            }
+            HorizontalDivider(color = HermesColors.Line)
+            DropdownMenuItem(text = { Text("Bot の設定に戻す", fontSize = 14.sp) }, onClick = { open = false; onPick(null) })
         }
     }
 }
