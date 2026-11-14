@@ -39,4 +39,17 @@ class ModelsTest {
     @Test fun `web socket url swaps the scheme and carries the ticket`() {
         assertEquals("wss://mac.example.ts.net/api/ws?ticket=t1", HermesApi(OkHttpClient(), "https://mac.example.ts.net/").webSocketUrl("t1"))
     }
+
+    @Test
+    fun aTurnIsRunningWhileItsActivityLabelIsSetAndFresh() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val busy = json.decodeFromString<SessionActivity>("""{"id":"s","last_activity_at":1000.0,"last_activity_description":"receiving stream response","message_count":3}""")
+        org.junit.Assert.assertEquals("receiving stream response", busy.running(now = 1030.0))
+        // Hermes clears the label when the turn ends and keeps the time.
+        val idle = json.decodeFromString<SessionActivity>("""{"last_activity_at":1000.0,"last_activity_description":""}""")
+        org.junit.Assert.assertNull(idle.running(now = 1001.0))
+        // A label nobody cleared (the process died mid-turn) stops counting after a while.
+        org.junit.Assert.assertNull(busy.running(now = 1000.0 + 3600))
+        org.junit.Assert.assertNull(json.decodeFromString<SessionActivity>("{}").running(now = 5.0))
+    }
 }

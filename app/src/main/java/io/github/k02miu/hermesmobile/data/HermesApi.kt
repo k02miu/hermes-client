@@ -83,6 +83,9 @@ class HermesApi(private val client: OkHttpClient, private val baseUrl: String) {
     suspend fun mutationSnapshot(sessionId: String, profile: String): MutationSnapshot =
         get("api/sessions/$sessionId/mutation-snapshot") { addQueryParameter("profile", profile) }
 
+    suspend fun sessionActivity(sessionId: String, profile: String): SessionActivity =
+        get("api/sessions/$sessionId") { addQueryParameter("profile", profile) }
+
     /** A file on the gateway's disk (a `MEDIA:` delivery), with the same guards Desktop's file browser gets. */
     suspend fun readFile(path: String, profile: String): GatewayFile {
         val r = get<FileReadResponse>("api/files/read") {

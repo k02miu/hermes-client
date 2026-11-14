@@ -78,6 +78,21 @@ data class MutationSnapshot(
 @Serializable
 data class WsTicket(val ticket: String, @SerialName("ttl_seconds") val ttlSeconds: Int = 30)
 
+/**
+ * `GET /api/sessions/{id}`, for the little that says whether a turn is running. Hermes writes what it is doing
+ * (`receiving stream response`, a tool's name) into the session while a turn runs and clears it when the turn
+ * ends, whichever Hermes process runs it; the time stays.
+ */
+@Serializable
+data class SessionActivity(
+    @SerialName("last_activity_at") val lastActivityAt: Double? = null,
+    @SerialName("last_activity_description") val description: String? = null,
+) {
+    /** What the running turn is doing, or null when none is. A label older than [staleAfter] is a crashed turn's. */
+    fun running(now: Double, staleAfter: Double = 900.0): String? =
+        description?.takeIf { it.isNotBlank() && now - (lastActivityAt ?: 0.0) < staleAfter }
+}
+
 /** `GET /api/files/read`: a gateway-local file as a base64 data URL. */
 @Serializable
 data class FileReadResponse(
